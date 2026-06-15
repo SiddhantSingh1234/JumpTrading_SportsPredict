@@ -1,0 +1,188 @@
+Here is the complete, production-ready blueprint for your Probability Cup multi-agent system. This architecture ensures elite predictive performance by blending deterministic math with LLM reasoning, while strictly safeguarding your 2026 Google AI Studio free tier limits.
+
+## The 100% Free Architecture Overview
+
+The system is decoupled into three execution stages that all read from and write to a single **SQLite Database**. Because SQLite perfectly handles concurrent reads without file locks, your data gathering, simulations, and chat interface can run simultaneously without crashing.
+
+### Stage 1: The Scraper & Memory Compactor (Gemini 3.1 Flash Lite)
+
+**Schedule:** Runs every 3 hours.
+**Quota Used:** 1 of 500 Daily Requests per run.
+
+Your Python or Go script scrapes the web for the latest team news, injuries, and FIFA group standings. Instead of dumping raw text into the database (which causes token bloat), the script pulls the *previous* news summary from SQLite and passes it alongside the *new* headlines to Gemini 3.1 Flash Lite.
+
+**System Instruction:**
+
+> You are a sports data archivist. You are provided with the 'Existing Match Briefing' and 'Newly Scraped News'. Merge them into a single, highly condensed briefing strictly under 200 words. Retain critical historical context (long-term injuries, suspension risks) while integrating the latest updates. Output only the condensed text briefing.
+
+The resulting summary is saved back to SQLite as the new "Form Index," ensuring historical weight is preserved perfectly without complex exponential decay math.
+
+---
+
+### Stage 2: The Local Simulation Engine (Python/Go)
+
+**Schedule:** Runs locally 15 minutes before the match.
+**Quota Used:** 0 API requests.
+
+Before the main bots wake up, your script queries the numeric stats (historical goals, card frequencies) from SQLite and runs thousands of deterministic simulations locally on your machine.
+
+* **Poisson Distribution:** Calculates expected goals ($xG$) to build a scoreline matrix, giving you hard mathematical baselines for Win/Draw/Loss and "Over/Under 2.5 Goals."
+* **Monte Carlo Engine:** Simulates the 90-minute flow of the match 10,000 times to calculate exact percentages for specific events, like "Probability of a yellow card before the 30th minute."
+
+The engine saves these raw probability percentages (0-100) into your database as the mathematical baseline.
+
+---
+
+### Stage 3: The Executive Predictor Bots (Gemini 3.5 Flash)
+
+**Schedule:** Runs immediately after Stage 2.
+**Quota Used:** 2 of 20 Daily Requests (1 per bot).
+
+This is where the actual prediction happens. Your script groups all 10 questions for the upcoming match into a single prompt package. It includes the 200-word condensed news briefing (from Stage 1) and the exact mathematical baselines (from Stage 2). It sends this package to your two distinct bots.
+
+**Bot 1: The Baseline Bot**
+
+* **Role:** Acts as the safe mathematical foundation.
+* **Instruction:** "You are a highly calibrated sports prediction API. Review the mathematical simulation baselines and the condensed news briefing. Make minor tactical adjustments to the math based on the news (e.g., lower a win probability slightly if a star player is injured). You must return predictions as integers from 0 to 100."
+
+**Bot 2: The Alpha / Contrarian Bot**
+
+* **Role:** Hunts for mispriced narratives to maximize Relative Brier Points (RBP).
+* **Instruction:** "You are a contrarian sports prediction API. Review the mathematical simulation baselines and the news. Your goal is to identify if the news narrative is causing an overreaction. If the news suggests extreme public bias, fade the public by adjusting the baseline probabilities aggressively in the opposite direction. You must return predictions as integers from 0 to 100."
+
+To guarantee they do not output conversational filler that breaks your Python parser, use `response_mime_type="application/json"` in your API call and enforce this exact schema:
+
+```json
+[
+  {
+    "question_id": "string",
+    "probability": "integer between 0 and 100"
+  }
+]
+
+```
+
+Your script takes these two clean JSON arrays and POSTs them to the Probability Cup API.
+
+---
+
+## The Query Interface (Gemini 3.1 Flash Lite)
+
+To chat with your bots without wasting your precious Gemini 3.5 Flash quota, you use a dedicated FastAPI server.
+
+When you ask, *"Why did Bot 2 give Mexico only a 30% chance?"*, the interface does not run new predictions or math. It executes a rapid SQLite query to retrieve:
+
+1. The 200-word condensed news briefing.
+2. The raw Monte Carlo baseline.
+3. Bot 2's final submitted 30% prediction.
+
+It passes these facts to **Gemini 3.1 Flash Lite**, instructed to act as a natural language translator:
+
+> You are an analytical assistant. Review the user's question, the raw Monte Carlo data, the news summary, and the bot's final submitted prediction. Explain the bot's logic by connecting the simulation data to the news. Do not calculate new probabilities.
+
+---
+
+## Quota & Performance Verification
+
+Because there are only a maximum of 4 matches per day occurring 1 at a time, your math is perfectly insulated against rate limits:
+
+| Model | Your Free Tier Limit | Your Actual Daily Usage | Status |
+| --- | --- | --- | --- |
+| **Gemini 3.5 Flash** (Predictors) | 20 Requests / Day | 8 Requests / Day (2 bots × 4 matches) | **Safe** (60% remaining) |
+| **Gemini 3.5 Flash** (Predictors) | 5 Requests / Minute | 2 Requests / Minute | **Safe** (60% remaining) |
+| **Gemini 3.1 Flash Lite** (Compactor/Chat) | 500 Requests / Day | ~15-20 Requests / Day | **Safe** (96% remaining) |
+| **Tokens Per Minute (TPM)** | 250,000 TPM | ~4,000 TPM (due to 200-word summary cap) | **Safe** (98% remaining) |
+
+By restricting the heavy reasoning model strictly to the final 15-minute window and offloading memory management and chat to Flash Lite, you have built an enterprise-grade, deterministic-AI hybrid system for exactly $0.
+### Deep-Dive Blueprint: The Real-Time Analytical Query Bot
+
+To maximize both analytical depth and responsiveness without draining your daily API limits, the Query Bot functions as a dynamic hybrid system. Instead of simply reading static, pre-calculated values from the database, it acts as a **real-time simulation orchestrator and text-reasoning engine**.
+
+When you submit a question, the interface instantly forces a fresh, localized execution of your mathematical models, combines those results with your historical news context, and hands the entire package to Gemini 3.1 Flash Lite to synthesize an answer.
+
+---
+
+### Step-by-Step Execution Lifecycle
+
+Every time you ask the Query Bot a question, it executes a precise four-stage lifecycle in milliseconds:
+
+#### 1. Context Retrieval (SQLite Layer)
+
+The backend instantly queries your single `stats.sqlite` database using the `match_id`. It pulls:
+
+* The raw numeric base variables (historical goal scoring averages, team card/foul frequencies).
+* The **200-word condensed news briefing** managed by your Stage 1 Compactor bot (ensuring historical weight and recent breaking news are already factored into the text context).
+
+#### 2. Forced Simulation Rerun (Local Compute Layer)
+
+Before talking to the AI, your local script forces a fresh mathematical execution on your machine using 0 to 100 scales:
+
+* **Poisson Re-Run:** Re-calculates the $xG$ matrix to yield current probabilities for match outcomes (Win/Draw/Loss) and exact score boundaries.
+* **Monte Carlo Re-Run:** Instantly fires a localized batch of 1,000 to 10,000 match timeline loops to find exact percentages for specific game events (e.g., probability of a card or goal occurring within a certain window).
+
+#### 3. Payload Packaging (The Prompt Context)
+
+The backend automatically compiles the text-based news and the newly generated mathematical outputs into a single structured string. This guarantees that Gemini is anchored to hard numbers that represent the absolute current state of your system.
+
+#### 4. Cognitive Synthesis (Gemini 3.1 Flash Lite Layer)
+
+The complete payload is sent to Gemini 3.1 Flash Lite. The model is explicitly instructed **not** to do basic math or guess odds. Instead, it plays the role of a deep-thinking sports analyst, explaining *how* the qualitative news narratives justify, alter, or explain the quantitative mathematical simulation baselines.
+
+---
+
+### The Data Package Passed to the AI
+
+To ensure the model has everything it needs to think deeply, the background script wraps your question in a comprehensive data envelope:
+
+* **Qualitative Anchors:** The latest condensed news state (e.g., *"Team A manager switching to a low-block defensive formation due to a star striker's ankle injury sustained two days ago"*).
+* **Quantitative Baselines (0-100 scale):** The fresh simulation numbers (e.g., `{"Poisson_Team_A_Win_Chance": 42.5, "Monte_Carlo_Early_Card_Chance": 18.0}`).
+* **The Analytical Mandate:** A system directive forcing the model to cross-reference the text and the numbers to explain the true "why" behind the data, rather than spitting out generic sports commentary.
+
+---
+
+### Why This Approach Maximizes Performance
+
+* **Infinite Flexibility:** If team stats or news items change rapidly in your database, your query interface doesn't show outdated figures. Because the local Poisson and Monte Carlo engines are forced to re-run on demand, your chat answers are always backed by real-time math.
+* **Sub-Second Local Compute:** Running thousands of math loops in pure Python or Go takes less than 50 milliseconds. By offloading the computation to your local CPU and offloading the narrative reasoning to the AI, you get an elite analytical assistant that responds almost instantly.
+* **Zero Quota Bleed:** Because this entire workflow maps to **Gemini 3.1 Flash Lite**, it pulls directly from your large 500-request-per-day tier. This keeps your high-accuracy Gemini 3.5 Flash quota completely untouched and perfectly preserved for the official 15-minute pre-kickoff prediction window.
+
+Note: Also keep option of using both Gemini 3 Flash and Gemini 3 Flash Lite and run the news scraper and local simulations just before either the main bots submit their predictions (only once for both) and for query bot as well
+Remember to add key details about every team in database basically maintain separate files for separate teams and maybe more if required but maximise performance
+ensure taht rate limit and token limit is not crossed in any case
+following questions have been asked previously so you may get a hint of the kind of questions asked but remember to be more inclusive and include all types of questions may even update stats saved if new question comes remember to save news as well
+try to make more improvements so that performance is maximised but ensure eveyhthing is free no matter what happens 
+
+Spain versus Cape Verde
+Will Cape Verde be caught offside 2 or more times?
+In the second half, will Spain have more corner kicks than Cape Verde?
+Will Cape Verde commit more fouls than Spain?
+Will Spain have more shots on target than Cape Verde in the second half?
+Will a penalty kick be awarded OR a red card be shown in the match?
+Will both teams score AND the match have 3 or more total goals?
+Will Spain win the match?
+Will there be 8 or more total shots on target?
+Will Dani Olmo score or assist a goal (excluding own goals)?
+Will Ryan Mendes have at least 1 shot on target?
+
+Sweden versus Tunisia
+At halftime, will Tunisia have more corner kicks than Sweden?
+Will Sweden commit more fouls than Tunisia?
+Will the second half have more total goals than the first half?
+Will Sweden score the first goal of the game and Tunisia score in the second half?
+Will Tunisia have more shots on target than Sweden in the second half?
+Will a penalty kick be awarded OR a red card be shown in the match?
+Will Sweden win the match?
+Will the match have 3 or more total goals?
+Will Viktor Gyökeres score or assist a goal (excluding own goals)?
+Will Ellyes Skhiri have at least 1 shot on target?
+
+Ivory Coast versus Ecaudor
+Will Ecuador commit more fouls than Ivory Coast?
+At halftime, will Ecuador have more corner kicks than Ivory Coast?
+Will Ivory Coast be caught offside 2 or more times?
+Will Ecuador have more shots on target than Ivory Coast in the second half?
+Will the second half have more total goals than the first half?
+Will Ivory Coast win the match?
+Will Ivory Coast score in the second half?
+Will there be 4 or more total cards shown?
+Will Ibrahim Sangaré have at least 1 shot on target?

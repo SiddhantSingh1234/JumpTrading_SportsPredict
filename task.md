@@ -1,0 +1,28 @@
+# Jump Trading Probability Cup - Task List
+
+- `[/]` 1. **Project Setup**
+  - `[ ]` Create `requirements.txt`
+  - `[ ]` Create `.env.example`
+  - `[ ]` Implement `src/config.py`
+- `[ ]` 2. **Database Layer**
+  - `[ ]` Implement `src/database.py` (Firebase Firestore)
+- `[ ]` 3. **Data Collection**
+  - `[ ]` Implement `src/collector.py` (API-Football, football-data, SportsPredict)
+  - `[ ]` Implement `src/news_scraper.py` (RSS + Gemini summaries)
+- `[ ]` 4. **Simulation Engine**
+  - `[ ]` Implement `src/market_classifier.py`
+  - `[ ]` Implement `src/engine.py` (Poisson, NegBinom, Monte Carlo)
+- `[ ]` 5. **Prediction & Submission**
+  - `[ ]` Implement `src/predictor.py` (Gemini 3.5 Flash bots)
+  - `[ ]` Implement `src/submitter.py` (SportsPredict API client)
+- `[ ]` 6. **Post-Match & Analytics**
+  - `[ ]` Implement `src/calibrator.py` (Gemma 4 31B calibration)
+- `[ ]` 7. **Orchestration & Tools**
+  - `[ ]` Implement `src/main.py` (CLI for GitHub Actions)
+  - `[ ]` Implement `src/query_bot.py` (Local FastAPI server)
+  - `[ ]` Implement `src/bootstrap.py` (Initial data population)
+- `[ ]` 8. **GitHub Actions Workflows**
+  - `[ ]` Create `.github/workflows/collect.yml`
+  - `[ ]` Create `.github/workflows/predict.yml`
+  - `[ ]` Create `.github/workflows/calibrate.yml`
+  - `[ ]` Create `.github/workflows/manual.yml`

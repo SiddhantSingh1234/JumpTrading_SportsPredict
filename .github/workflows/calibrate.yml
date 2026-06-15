@@ -1,0 +1,34 @@
+name: Daily Calibration Phase
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Every day at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create Firebase Key JSON
+        run: echo '${{ secrets.FIREBASE_CREDENTIALS }}' > firebase-credentials.json
+
+      - name: Run Calibration
+        env:
+          SPORTSPREDICT_BOT1_KEY: ${{ secrets.SPORTSPREDICT_BOT1_KEY }}
+          SPORTSPREDICT_BOT2_KEY: ${{ secrets.SPORTSPREDICT_BOT2_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
+        run: python src/main.py calibrate

@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# Credentials (CRITICAL TO KEEP OUT OF GITHUB)
+firebase-credentials.json
+
+# Local Data caching
+data/
+
+# IDEs
+.vscode/
+.idea/
+jumptrading-sportspredict-firebase-adminsdk-fbsvc-58c8e14c10.json
+.venv/

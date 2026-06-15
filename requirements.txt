@@ -1,0 +1,10 @@
+requests
+scipy
+numpy
+google-genai
+firebase-admin
+beautifulsoup4
+feedparser
+python-dotenv
+fastapi
+uvicorn
