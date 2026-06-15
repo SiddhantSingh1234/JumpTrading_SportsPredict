@@ -46,19 +46,25 @@ class Database:
     # --- Match Queries ---
     
     def get_upcoming_matches(self, within_minutes=None):
-        """Get matches starting soon."""
-        query = self.db.collection("matches").where("status", "in", ["upcoming", "scheduled"])
-        matches = [doc.to_dict() for doc in query.stream()]
+        """Get matches starting soon based on closing_time."""
+        # The Jump Trading API doesn't use 'status', it just returns matches with opening/closing times.
+        matches = [doc.to_dict() for doc in self.db.collection("matches").stream()]
         
-        if within_minutes:
+        if within_minutes is not None:
             now = datetime.utcnow()
             result = []
             for match in matches:
-                # Assuming kickoff_time is stored as ISO format string
+                # closing_time is typically the kickoff time when betting closes
+                time_str = match.get("closing_time") or match.get("opening_time")
+                if not time_str:
+                    continue
+                    
                 try:
-                    kickoff = datetime.fromisoformat(match.get("kickoff_time", "").replace("Z", "+00:00")).replace(tzinfo=None)
+                    kickoff = datetime.fromisoformat(time_str.replace("Z", "+00:00")).replace(tzinfo=None)
                     delta_minutes = (kickoff - now).total_seconds() / 60.0
-                    if 0 <= delta_minutes <= within_minutes:
+                    
+                    # Include matches starting within the window, or matches that started up to 120 mins ago (live)
+                    if -120 <= delta_minutes <= within_minutes:
                         result.append(match)
                 except Exception as e:
                     logger.warning(f"Error parsing date for match {match.get('id')}: {e}")
