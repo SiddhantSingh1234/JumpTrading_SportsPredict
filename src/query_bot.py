@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import uvicorn
 import logging
 from src.main import AgenticSystem
+from src.config import Config
 
 logger = logging.getLogger("query_bot")
 
@@ -27,6 +28,7 @@ app = FastAPI(title="Probability Cup Query Bot", lifespan=lifespan)
 class QueryRequest(BaseModel):
     question: str
     model: str = None  # Optional: "gemini-3.5-flash" or "gemini-3.5-flash-lite"
+    match_id: str = None # Optional precise match identifier
 
 @app.get("/api/status")
 async def get_status():
@@ -53,15 +55,20 @@ async def ask_question(req: QueryRequest):
     Ask a question.
     Will do a quick refresh and re-sim if it's about an upcoming match.
     """
-    q = req.question.lower()
-    
-    # Very simple mock matching logic. A real implementation would use AI to extract the match intent.
-    matches = system.db.get_upcoming_matches(within_minutes=72*60)
     target_match = None
-    for match in matches:
-        if match.get("home_team_name", "").lower() in q or match.get("away_team_name", "").lower() in q:
-            target_match = match
-            break
+    
+    if req.match_id:
+        target_match = system.db.get_match(req.match_id)
+        if not target_match:
+             return {"answer": f"I couldn't find a match with ID {req.match_id} in the database."}
+    else:
+        # Fallback to simple keyword matching if no explicit match_id is provided
+        q = req.question.lower()
+        matches = system.db.get_upcoming_matches(within_minutes=72*60)
+        for match in matches:
+            if match.get("home_team_name", "").lower() in q or match.get("away_team_name", "").lower() in q:
+                target_match = match
+                break
             
     if target_match:
         match_id = target_match.get("id")
