@@ -35,3 +35,5 @@ jobs:
           PREDICT_WINDOW_MINUTES: "15"
           PREDICT_WINDOW_BUFFER: "5"
         run: python src/main.py predict
+
+
