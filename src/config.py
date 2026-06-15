@@ -28,7 +28,7 @@ class Config:
     # Gemini Model Selection
     GEMINI_PREDICT_MODEL = "gemini-3.5-flash"
     GEMINI_SUMMARY_MODEL = "gemini-3.1-flash-lite"
-    GEMINI_STATS_MODEL = "gemma-4-31b"
+    GEMINI_STATS_MODEL = "gemma-4-31b-it"
     QUERY_BOT_MODEL = os.environ.get("QUERY_BOT_MODEL", "gemini-3.5-flash-lite")
     
     # Competition Constants

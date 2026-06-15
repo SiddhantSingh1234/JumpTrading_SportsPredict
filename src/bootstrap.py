@@ -23,6 +23,10 @@ def run_bootstrap():
     from src.news_scraper import NewsScraper
     from src.ai_client import AIClient
     from src.config import Config
+    from src.seed_team_codes import seed_codes, FIFA_CODES
+    
+    # Force seed official FIFA codes to prevent translation bugs
+    seed_codes()
     
     af_client = APIFootballClient()
     fd_client = FootballDataClient()
@@ -131,7 +135,7 @@ def run_bootstrap():
         team_doc = {
             "team_id": team_id,
             "name": team_name,
-            "code": team_info.get("code", team_name[:3].upper()) if team_info else team_name[:3].upper(),
+            "code": FIFA_CODES.get(team_name, team_name[:3].upper()),
             "logo": team_info.get("logo", "") if team_info else "",
             "avg_goals_scored": round(avg_scored, 2),
             "avg_goals_conceded": round(avg_conceded, 2),

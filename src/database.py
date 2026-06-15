@@ -117,8 +117,26 @@ class Database:
         batch.commit()
         
     def get_team(self, team_id):
+        if not team_id: return None
         doc = self.db.collection("teams").document(str(team_id)).get()
         return doc.to_dict() if doc.exists else None
+        
+    def get_team_by_name_or_code(self, query_str):
+        if not query_str: return None
+        
+        # Try exact match on code
+        query = self.db.collection("teams").where("code", "==", query_str).limit(1)
+        docs = list(query.stream())
+        if docs:
+            return docs[0].to_dict()
+            
+        # Try exact match on name
+        query = self.db.collection("teams").where("name", "==", query_str).limit(1)
+        docs = list(query.stream())
+        if docs:
+            return docs[0].to_dict()
+            
+        return None
         
     def get_player(self, player_id):
         doc = self.db.collection("players").document(str(player_id)).get()
