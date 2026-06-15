@@ -40,3 +40,4 @@ jobs:
           FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
           FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
         run: python src/main.py ${{ github.event.inputs.action }}
+
