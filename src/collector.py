@@ -243,14 +243,14 @@ class DataCollector:
             
             if af_fixture_id:
                 # Update recent matches to capture friendlies/qualifiers played since bootstrap
-                if self._should_refresh(match, "recent_matches", hours=24):
+                if self._should_refresh(match, "recent_matches", hours=None):
                     for tid in [home_team_id, away_team_id]:
                         if tid:
                             team_name = match.get("home_team_name") if tid == home_team_id else match.get("away_team_name")
                             self._update_team_goals(tid, team_name, match)
                                 
                 # Lazy Load Advanced Statistics (Corners, Fouls, Cards)
-                if self._should_refresh(match, "advanced_stats", hours=24):
+                if self._should_refresh(match, "advanced_stats", hours=None):
                     for tid in [home_team_id, away_team_id]:
                         if not tid: continue
                         
@@ -313,7 +313,7 @@ class DataCollector:
                             logger.info(f"Updated advanced stats for team {tid} (Full: {totals}, HT: {ht_totals})")
                 
                 # Stats
-                if self._should_refresh(match, "stats", hours=24):
+                if self._should_refresh(match, "stats", hours=None):
                     for tid in [home_team_id, away_team_id]:
                         if tid:
                             stats = self.api_football.get_team_stats(tid, season, league_id)
@@ -326,14 +326,14 @@ class DataCollector:
                             self.db.update_team_stats(match, stats)
 
                 # Injuries & Lineups
-                if self._should_refresh(match, "injuries", hours=6):
+                if self._should_refresh(match, "injuries", hours=3):
                     injuries = self.api_football.get_injuries(af_fixture_id)
                     lineups = self.api_football.get_lineups(af_fixture_id)
                     self.db.update_injuries(match, injuries)
                     self.db.update_lineups(match, lineups)
                     
                 # Players
-                if self._should_refresh(match, "players", hours=24):
+                if self._should_refresh(match, "players", hours=None):
                     for tid in [home_team_id, away_team_id]:
                         if tid:
                             players = self.api_football.get_top_players(tid, season)
@@ -344,7 +344,7 @@ class DataCollector:
                             self.db.update_players(tid, players)
 
             # Extensive News & AI-Mined Stats
-            if self._should_refresh(match, "news", hours=6):
+            if self._should_refresh(match, "news", hours=3):
                 headlines = self.news_scraper.scrape_all_feeds(match)
                 previous_briefing = self.db.get_news(match.get("id"))
                 
@@ -427,8 +427,28 @@ class DataCollector:
 
     def _should_refresh(self, match, key, hours=6):
         """Helper to decide if we should make API calls based on time."""
-        # Simple implementation: always true for testing, or check updated_at fields
-        return True
+        state_key = f"last_updated_{key}"
+        last_updated_str = match.get(state_key)
+        
+        if not last_updated_str:
+            # If we've never updated it, return True and stamp it now
+            match[state_key] = datetime.utcnow().isoformat()
+            self.db.save_matches([match])
+            return True
+            
+        if hours is None:
+            return False
+            
+        try:
+            last_updated = datetime.fromisoformat(last_updated_str)
+            delta_hours = (datetime.utcnow() - last_updated).total_seconds() / 3600.0
+            if delta_hours >= hours:
+                match[state_key] = datetime.utcnow().isoformat()
+                self.db.save_matches([match])
+                return True
+            return False
+        except Exception:
+            return True
 
     def _update_team_goals(self, team_id, team_name, match_doc):
         """Re-calculate goal averages using the API-Football -> Football-Data cascade."""
