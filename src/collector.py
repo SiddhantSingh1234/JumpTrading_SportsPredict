@@ -1,4 +1,5 @@
 import requests
+import time as _time
 import time
 import logging
 from datetime import datetime
@@ -45,9 +46,15 @@ class APIFootballClient:
             "x-rapidapi-key": Config.API_FOOTBALL_KEY,   # Used if registered via RapidAPI
             "x-rapidapi-host": host
         }
+        self._last_request_time = 0
         
     @retry_request
     def _get(self, endpoint, params=None):
+        # Enforce 7s gap between requests (10 RPM free tier = 6s minimum, +1s buffer)
+        elapsed = _time.time() - self._last_request_time
+        if elapsed < 7:
+            _time.sleep(7 - elapsed)
+        self._last_request_time = _time.time()
         return requests.get(f"{self.base_url}{endpoint}", headers=self.headers, params=params)
 
     def get_team_stats(self, team_id, season, league_id):
@@ -121,9 +128,15 @@ class FootballDataClient:
             "X-Auth-Token": Config.FOOTBALL_DATA_KEY
         }
         self.base_url = Config.FOOTBALL_DATA_BASE_URL.rstrip('/')
+        self._last_request_time = 0
         
     @retry_request
     def _get(self, endpoint, params=None):
+        # Football-Data.org free tier: 10 requests/minute
+        elapsed = _time.time() - self._last_request_time
+        if elapsed < 7:
+            _time.sleep(7 - elapsed)
+        self._last_request_time = _time.time()
         return requests.get(f"{self.base_url}{endpoint}", headers=self.headers, params=params)
 
     def search_team(self, name):

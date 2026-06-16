@@ -34,8 +34,8 @@ class Config:
     # Competition Constants
     PROBABILITY_MIN = 1
     PROBABILITY_MAX = 99
-    PREDICT_WINDOW_MINUTES = int(os.environ.get("PREDICT_WINDOW_MINUTES", "15"))
-    PREDICT_WINDOW_BUFFER = int(os.environ.get("PREDICT_WINDOW_BUFFER", "5"))
+    PREDICT_WINDOW_MINUTES = int(os.environ.get("PREDICT_WINDOW_MINUTES", "30"))
+    PREDICT_WINDOW_BUFFER = int(os.environ.get("PREDICT_WINDOW_BUFFER", "10"))
     
     # Paths
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")

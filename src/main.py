@@ -106,7 +106,7 @@ class AgenticSystem:
         
         bot1_preds = self.predictor.predict(1, sim_results, news, structured, classified, updated_match)
         # Delay for RPM limit
-        time.sleep(12) 
+        time.sleep(8)  # Allow rate limiter in ai_client to handle precise timing
         bot2_preds = self.predictor.predict(2, sim_results, news, structured, classified, updated_match)
         
         # 5. Submit
