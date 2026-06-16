@@ -63,7 +63,7 @@ class AgenticSystem:
     def predict(self):
         logger.info("Executing phase: QUICK REFRESH + PREDICT")
         total_window = Config.PREDICT_WINDOW_MINUTES + Config.PREDICT_WINDOW_BUFFER
-        matches = self.db.get_upcoming_matches(within_minutes=240)
+        matches = self.db.get_upcoming_matches(within_minutes=total_window)
         
         if not matches:
             logger.info(f"No matches starting within {total_window} minutes. Exiting cleanly.")
@@ -71,9 +71,9 @@ class AgenticSystem:
             
         for match in matches:
             match_id = match.get("id")
-            # if self.db.is_predicted_final(match_id):
-            #     logger.info(f"Match {match_id} already predicted. Skipping.")
-            #     continue
+            if self.db.is_predicted_final(match_id):
+                logger.info(f"Match {match_id} already predicted. Skipping.")
+                continue
                 
             self._run_prediction_pipeline(match)
 
