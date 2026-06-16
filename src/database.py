@@ -54,8 +54,8 @@ class Database:
             now = datetime.utcnow()
             result = []
             for match in matches:
-                # closing_time is typically the kickoff time when betting closes
-                time_str = match.get("closing_time") or match.get("opening_time")
+                # Trigger based purely on opening_time (when markets open) as requested by user
+                time_str = match.get("opening_time")
                 if not time_str:
                     continue
                     
