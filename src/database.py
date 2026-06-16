@@ -64,7 +64,7 @@ class Database:
                     delta_minutes = (kickoff - now).total_seconds() / 60.0
                     
                     # Include matches starting within the window, or matches that started up to 120 mins ago (live)
-                    if -120 <= delta_minutes <= within_minutes:
+                    if 0 <= delta_minutes <= within_minutes:
                         result.append(match)
                 except Exception as e:
                     logger.warning(f"Error parsing date for match {match.get('id')}: {e}")

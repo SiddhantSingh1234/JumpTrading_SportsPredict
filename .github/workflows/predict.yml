@@ -29,3 +29,11 @@ jobs:
           FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
           FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
         run: python src/main.py predict
+
+      - name: Upload Prediction Markdown Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-reports
+          path: data/predictions/*.md
+          retention-days: 7

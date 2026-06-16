@@ -25,7 +25,15 @@ def retry_api(func):
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as e:
-                logger.error(f"SportsPredict Request failed: {e}")
+                # If it's an HTTPError with a response, print the exact API error message
+                error_msg = ""
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_msg = f" API Response: {e.response.text}"
+                    except:
+                        pass
+                
+                logger.error(f"SportsPredict Request failed: {e}{error_msg}")
                 if i == retries - 1:
                     raise
                 time.sleep(backoffs[i])
@@ -73,13 +81,18 @@ class SportsPredictAPI:
         return self._get(f"/matches?eventid={event_id}")
         
     def get_markets(self, match_id):
-        return self._get(f"/markets?matchid={match_id}")
+        # The API documentation says matchid, but the backend actually requires match_id!
+        return self._get(f"/markets?match_id={match_id}")
         
     def get_results(self):
         return self._get("/results")
 
     def submit_batch(self, predictions):
         """Submit up to 50 predictions at once."""
+        if not predictions:
+            logger.warning("Empty predictions array passed to submit_batch! Skipping submission to avoid 400 Bad Request.")
+            return {"results": []}
+            
         # The API accepts 1-99 for probability
         payload = {"predictions": []}
         for p in predictions:
