@@ -30,7 +30,7 @@ class Predictor:
             "sim_results": sim_results.get("market_probs", {}),
             "news_briefing": news,
             "structured_news": structured_news,
-            "markets": [{"id": m["id"], "text": m["question_text"]} for m in classified_markets]
+            "markets": [{"id": m.get("id"), "text": m.get("question_text") or m.get("question") or m.get("text", "")} for m in classified_markets]
         }
         
         if self.ai:
