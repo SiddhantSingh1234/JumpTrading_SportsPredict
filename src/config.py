@@ -35,7 +35,7 @@ class Config:
     PROBABILITY_MIN = 1
     PROBABILITY_MAX = 99
     PREDICT_WINDOW_MINUTES = int(os.environ.get("PREDICT_WINDOW_MINUTES", "30"))
-    PREDICT_WINDOW_BUFFER = int(os.environ.get("PREDICT_WINDOW_BUFFER", "15"))
+    PREDICT_WINDOW_BUFFER = int(os.environ.get("PREDICT_WINDOW_BUFFER", "30"))
     
     # Paths
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
