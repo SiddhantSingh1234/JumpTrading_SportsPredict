@@ -33,7 +33,7 @@ jobs:
           FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
           # Configurable prediction window matching the cron schedule (15) + buffer (5)
           PREDICT_WINDOW_MINUTES: "30"
-          PREDICT_WINDOW_BUFFER: "10"
+          PREDICT_WINDOW_BUFFER: "15"
         run: python src/main.py predict
 
 

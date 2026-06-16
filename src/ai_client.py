@@ -25,7 +25,11 @@ DEFAULT_RETRY_WAIT = 30
 class AIClient:
     def __init__(self, api_key):
         self.api_key = api_key
-        self.client = genai.Client(api_key=self.api_key)
+        # Set a 10-minute HTTP timeout — model is allowed to think deeply
+        self.client = genai.Client(
+            api_key=self.api_key,
+            http_options=types.HttpOptions(timeout=600_000)  # 10 minutes in ms
+        )
         # Track the last call timestamp per model for rate-limiting.
         self._last_call_time: dict[str, float] = {}
 

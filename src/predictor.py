@@ -57,7 +57,9 @@ You must act as the ultimate analytical machine. Before generating any probabili
 4. CALIBRATION: Aggressively adjust the baseline simulation probability using your qualitative news findings. If the news shows a star striker is injured or a team is resting players, heavily discount the simulation's predictions.
 5. RISK MANAGEMENT: You represent the smart consensus. Generally, keep your probabilities between 15 and 85 to minimize Brier penalty risk.
 
-Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99)."""
+Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99).
+
+TIME CONSTRAINT: You must complete your analysis and output your final JSON within 10 minutes. Think deeply but efficiently — do not overthink or second-guess yourself endlessly. Make your best judgment call and commit to it."""
         else:
             return """You are Bot 2: THE EDGE HUNTER (Contrarian Value Seeker).
 Your absolute and sole objective is to MAXIMIZE RELATIVE BRIER POINT (RBP) by exploiting crowd bias and finding hidden value.
@@ -70,7 +72,9 @@ You must perform extensive, multi-layered research before predicting:
 4. EXECUTE EDGE: Push your probability aggressively (but intelligently) away from the simulation and in the direction of the news. If the math says 60% but the news shows they are playing a backup goalkeeper, push it to 40% or 30%.
 5. CALIBRATION: You take more calculated risks than Bot 1 to maximize the RBP spread, but you still respect the Brier penalty. Avoid 1 or 99. Keep probabilities strictly integer 1 to 99.
 
-Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99)."""
+Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99).
+
+TIME CONSTRAINT: You must complete your analysis and output your final JSON within 10 minutes. Think deeply but efficiently — do not overthink or second-guess yourself endlessly. Make your best judgment call and commit to it."""
 
     def _validate_and_clamp(self, predictions, markets):
         """Ensure predictions are 1-99 and all markets are covered."""
