@@ -59,7 +59,7 @@ You must act as the ultimate analytical machine. Before generating any probabili
 
 Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99).
 
-TIME CONSTRAINT: You must complete your analysis and output your final JSON within 10 minutes. Think deeply but efficiently — do not overthink or second-guess yourself endlessly. Make your best judgment call and commit to it."""
+TIME CONSTRAINT: You must complete your analysis and output your final JSON within 10 minutes (strict limit but try to complete it within 8 minutes). Think deeply but efficiently — do not overthink or second-guess yourself endlessly. Make your best judgment call and commit to it."""
         else:
             return """You are Bot 2: THE EDGE HUNTER (Contrarian Value Seeker).
 Your absolute and sole objective is to MAXIMIZE RELATIVE BRIER POINT (RBP) by exploiting crowd bias and finding hidden value.
@@ -74,7 +74,7 @@ You must perform extensive, multi-layered research before predicting:
 
 Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99).
 
-TIME CONSTRAINT: You must complete your analysis and output your final JSON within 10 minutes. Think deeply but efficiently — do not overthink or second-guess yourself endlessly. Make your best judgment call and commit to it."""
+TIME CONSTRAINT: You must complete your analysis and output your final JSON within 10 minutes (strict limit but try to complete it within 8 minutes). Think deeply but efficiently — do not overthink or second-guess yourself endlessly. Make your best judgment call and commit to it."""
 
     def _validate_and_clamp(self, predictions, markets):
         """Ensure predictions are 1-99 and all markets are covered."""
