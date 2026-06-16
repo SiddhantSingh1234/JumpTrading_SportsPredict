@@ -63,7 +63,7 @@ class AgenticSystem:
     def predict(self):
         logger.info("Executing phase: QUICK REFRESH + PREDICT")
         total_window = Config.PREDICT_WINDOW_MINUTES + Config.PREDICT_WINDOW_BUFFER
-        matches = self.db.get_upcoming_matches(within_minutes=total_window)
+        matches = self.db.get_upcoming_matches(within_minutes=240)
         
         if not matches:
             logger.info(f"No matches starting within {total_window} minutes. Exiting cleanly.")
@@ -71,9 +71,9 @@ class AgenticSystem:
             
         for match in matches:
             match_id = match.get("id")
-            if self.db.is_predicted_final(match_id):
-                logger.info(f"Match {match_id} already predicted. Skipping.")
-                continue
+            # if self.db.is_predicted_final(match_id):
+            #     logger.info(f"Match {match_id} already predicted. Skipping.")
+            #     continue
                 
             self._run_prediction_pipeline(match)
 
@@ -116,9 +116,9 @@ class AgenticSystem:
         
         # 5. Submit to Jump Trading
         logger.info(f"Submitting Bot 1 predictions for {match_name}...")
-        r1 = self.sp_api1.submit_batch(bot1_preds)
+        r1 = self.sp_api1.submit_batch(bot1_preds, self.lobby_id)
         logger.info(f"Submitting Bot 2 predictions for {match_name}...")
-        r2 = self.sp_api2.submit_batch(bot2_preds)
+        r2 = self.sp_api2.submit_batch(bot2_preds, self.lobby_id)
         
         self.db.save_predictions(match_id, 1, bot1_preds, r1)
         self.db.save_predictions(match_id, 2, bot2_preds, r2)

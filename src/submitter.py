@@ -87,7 +87,7 @@ class SportsPredictAPI:
     def get_results(self):
         return self._get("/results")
 
-    def submit_batch(self, predictions):
+    def submit_batch(self, predictions, lobby_id):
         """Submit up to 50 predictions at once."""
         if not predictions:
             logger.warning("Empty predictions array passed to submit_batch! Skipping submission to avoid 400 Bad Request.")
@@ -97,7 +97,8 @@ class SportsPredictAPI:
         payload = {"predictions": []}
         for p in predictions:
             payload["predictions"].append({
-                "marketId": p["market_id"],
+                "market_id": p["market_id"],
+                "lobby_id": lobby_id,
                 "probability": p["probability"]
             })
         logger.info(f"Submitting batch of {len(predictions)} predictions.")
