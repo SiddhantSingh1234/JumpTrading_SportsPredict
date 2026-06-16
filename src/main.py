@@ -83,13 +83,17 @@ class AgenticSystem:
 
     def _run_prediction_pipeline(self, match):
         match_id = match.get("id")
-        logger.info(f"Running full prediction pipeline for match {match_id}")
+        match_name = match.get("name", "Unknown Match")
+        logger.info(f"Running full prediction pipeline for {match_name} ({match_id})")
         
         # 1. Quick Refresh
         self.collector.quick_refresh(match_id)
         
         # 2. Get Markets
         markets = self.sp_api1.get_markets(match_id)
+        if not markets:
+            logger.error(f"No markets returned from SportsPredict API for {match_name}. Skipping.")
+            return
         classified = self.classifier.classify_all(markets, match)
         self.db.save_markets(match_id, classified)
         
@@ -104,13 +108,16 @@ class AgenticSystem:
         news = self.db.get_news(match_id)
         structured = self.db.get_structured_news(match_id)
         
+        logger.info(f"Generating Bot 1 predictions for {match_name}...")
         bot1_preds = self.predictor.predict(1, sim_results, news, structured, classified, updated_match)
-        # Delay for RPM limit
         time.sleep(8)  # Allow rate limiter in ai_client to handle precise timing
+        logger.info(f"Generating Bot 2 predictions for {match_name}...")
         bot2_preds = self.predictor.predict(2, sim_results, news, structured, classified, updated_match)
         
-        # 5. Submit
+        # 5. Submit to Jump Trading
+        logger.info(f"Submitting Bot 1 predictions for {match_name}...")
         r1 = self.sp_api1.submit_batch(bot1_preds)
+        logger.info(f"Submitting Bot 2 predictions for {match_name}...")
         r2 = self.sp_api2.submit_batch(bot2_preds)
         
         self.db.save_predictions(match_id, 1, bot1_preds, r1)
@@ -118,8 +125,83 @@ class AgenticSystem:
         
         self.db.mark_predicted(match_id)
         
+        # 6. Write prediction report to file
+        self._write_prediction_report(match_name, match_id, classified, sim_results, bot1_preds, bot2_preds)
+        
         self.db.log_schedule({"action": "prediction_pipeline", "match_id": match_id, "status": "success"})
-        logger.info(f"Pipeline complete for match {match_id}")
+        logger.info(f"Pipeline complete for {match_name} ({match_id})")
+
+    def _write_prediction_report(self, match_name, match_id, markets, sim_results, bot1_preds, bot2_preds):
+        """Write a readable prediction report to a markdown file."""
+        import os
+        from datetime import datetime
+        
+        report_dir = os.path.join(Config.DATA_DIR, "predictions")
+        os.makedirs(report_dir, exist_ok=True)
+        
+        # Create filename from match name and timestamp
+        safe_name = match_name.replace(" ", "_").replace("/", "-")
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(report_dir, f"{safe_name}_{timestamp}.md")
+        
+        # Build a lookup from market_id to question text
+        market_questions = {}
+        for m in markets:
+            mid = str(m.get("id", ""))
+            text = m.get("question_text") or m.get("question") or m.get("text", "Unknown question")
+            market_questions[mid] = text
+        
+        # Build prediction lookup
+        b1_lookup = {str(p.get("market_id")): p.get("probability", "?") for p in bot1_preds}
+        b2_lookup = {str(p.get("market_id")): p.get("probability", "?") for p in bot2_preds}
+        
+        mc = sim_results.get("mc_summary", {})
+        
+        lines = [
+            f"# Prediction Report: {match_name}",
+            f"**Match ID:** {match_id}",
+            f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            "",
+            "## Simulation Summary",
+            f"- Home Win: {mc.get('home_win', 0):.1%}",
+            f"- Draw: {mc.get('draw', 0):.1%}",
+            f"- Away Win: {mc.get('away_win', 0):.1%}",
+            f"- Avg Total Goals: {mc.get('avg_goals', 0):.2f}",
+            "",
+            "## Predictions",
+            "",
+            "| # | Market Question | Bot 1 (Calibrated) | Bot 2 (Edge Hunter) |",
+            "|---|----------------|--------------------|--------------------|" 
+        ]
+        
+        for i, mid in enumerate(market_questions, 1):
+            question = market_questions[mid]
+            b1 = b1_lookup.get(mid, "—")
+            b2 = b2_lookup.get(mid, "—")
+            lines.append(f"| {i} | {question} | **{b1}%** | **{b2}%** |")
+        
+        lines.append("")
+        lines.append("---")
+        lines.append("*Submitted to Jump Trading SportsPredict API*")
+        
+        report_content = "\n".join(lines)
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(report_content)
+        
+        logger.info(f"Prediction report saved to: {filepath}")
+        
+        # Also print to console for GitHub Actions logs
+        print("\n" + "=" * 70)
+        print(f"  PREDICTION REPORT: {match_name}")
+        print("=" * 70)
+        for i, mid in enumerate(market_questions, 1):
+            question = market_questions[mid]
+            b1 = b1_lookup.get(mid, "—")
+            b2 = b2_lookup.get(mid, "—")
+            print(f"  Q{i}: {question}")
+            print(f"       Bot 1: {b1}%  |  Bot 2: {b2}%")
+        print("=" * 70 + "\n")
 
 
 if __name__ == "__main__":

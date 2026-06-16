@@ -25,10 +25,10 @@ DEFAULT_RETRY_WAIT = 30
 class AIClient:
     def __init__(self, api_key):
         self.api_key = api_key
-        # Set a 10-minute HTTP timeout — model is allowed to think deeply
+        # Set a 15-minute HTTP timeout — model is allowed to think deeply
         self.client = genai.Client(
             api_key=self.api_key,
-            http_options=types.HttpOptions(timeout=600_000)  # 10 minutes in ms
+            http_options=types.HttpOptions(timeout=900_000)  # 15 minutes in ms
         )
         # Track the last call timestamp per model for rate-limiting.
         self._last_call_time: dict[str, float] = {}
@@ -118,11 +118,25 @@ Synthesize the new headlines with the previous briefing. Extract key injuries, l
             return "News briefing temporarily unavailable."
 
     def extract_stats(self, headlines, match_data):
-        """Use Gemma to extract structured JSON stats from news."""
+        """Use Gemini to extract structured JSON stats from news."""
         logger.info("Extracting structured stats via AI...")
-        prompt = f"""Extract structured statistical data and injury info from these headlines for {match_data.get('home_team_name')} vs {match_data.get('away_team_name')}.
+        home_team = match_data.get('home_team_name')
+        away_team = match_data.get('away_team_name')
+        prompt = f"""Extract structured statistical data and injury info from these headlines for {home_team} (home) vs {away_team} (away).
 Headlines: {json.dumps(headlines, indent=2)}
-Output strict JSON format. You MUST aggressively hunt for any mention of corners, fouls, cards, red cards, penalties, shots, or shots on target. Example: {{"injuries": ["player X"], "recent_corners": 5, "recent_yellow_cards": 2, "recent_red_cards": 0, "recent_fouls": 11, "recent_shots": 12, "recent_shots_on_target": 4, "recent_penalties": 1}}"""
+
+Output strict JSON format. You MUST aggressively hunt for any mention of corners, fouls, cards, red cards, penalties, shots, or shots on target. 
+Prefix stats with 'home_' or 'away_' depending on which team the stat belongs to.
+Example: {{
+  "home_injuries": ["player X"], "away_injuries": [],
+  "home_recent_corners": 5.5, "away_recent_corners": 4.0,
+  "home_recent_yellow_cards": 2.0, "away_recent_yellow_cards": 1.5,
+  "home_recent_red_cards": 0, "away_recent_red_cards": 0.1,
+  "home_recent_fouls": 11.0, "away_recent_fouls": 10.5,
+  "home_recent_shots": 12.0, "away_recent_shots": 9.0,
+  "home_recent_shots_on_target": 4.0, "away_recent_shots_on_target": 3.0,
+  "home_recent_penalties": 0.2, "away_recent_penalties": 0.1
+}}"""
 
         try:
             response = self._safe_generate(

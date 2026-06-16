@@ -28,14 +28,14 @@ class Config:
     # Gemini Model Selection
     GEMINI_PREDICT_MODEL = "gemini-3.5-flash"
     GEMINI_SUMMARY_MODEL = "gemini-3.1-flash-lite"
-    GEMINI_STATS_MODEL = "gemma-4-31b-it"
+    GEMINI_STATS_MODEL = "gemini-3.1-flash-lite"
     QUERY_BOT_MODEL = os.environ.get("QUERY_BOT_MODEL", "gemini-3.1-flash-lite")
     
     # Competition Constants
     PROBABILITY_MIN = 1
     PROBABILITY_MAX = 99
     PREDICT_WINDOW_MINUTES = int(os.environ.get("PREDICT_WINDOW_MINUTES", "30"))
-    PREDICT_WINDOW_BUFFER = int(os.environ.get("PREDICT_WINDOW_BUFFER", "10"))
+    PREDICT_WINDOW_BUFFER = int(os.environ.get("PREDICT_WINDOW_BUFFER", "15"))
     
     # Paths
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")

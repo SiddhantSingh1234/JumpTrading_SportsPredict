@@ -1,9 +1,6 @@
 name: Quick Refresh and Predict Phase
 
 on:
-  schedule:
-    # Change this cron expression to configure how often the predict check runs
-    - cron: '*/30 * * * *' # Every 30 minutes
   workflow_dispatch:
 
 jobs:
@@ -31,9 +28,4 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
           FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
-          # Configurable prediction window matching the cron schedule (15) + buffer (5)
-          PREDICT_WINDOW_MINUTES: "30"
-          PREDICT_WINDOW_BUFFER: "20"
         run: python src/main.py predict
-
-
