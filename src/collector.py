@@ -1,10 +1,13 @@
 import requests
 import time as _time
-import time
 import logging
 from datetime import datetime
 from src.config import Config
 from src.database import Database
+from src.seed_team_codes import FIFA_CODES
+
+# Build a reverse lookup: 3-letter code -> full name
+_CODE_TO_NAME = {code: name for name, code in FIFA_CODES.items()}
 
 logger = logging.getLogger(__name__)
 
@@ -236,30 +239,44 @@ class DataCollector:
             season = "2026"
             league_id = 1  # World Cup league ID in API-football
             
-            if not af_fixture_id and match.get("kickoff_time"):
-                date_str = match["kickoff_time"].split("T")[0]
-                fixtures = self.api_football.get_fixtures_by_date(date_str)
-                for f in fixtures:
-                    t_home = f.get("teams", {}).get("home", {}).get("name", "").lower()
-                    t_away = f.get("teams", {}).get("away", {}).get("name", "").lower()
-                    if match.get("home_team_name", "").lower() in t_home or t_home in match.get("home_team_name", "").lower():
-                        af_fixture_id = f.get("fixture", {}).get("id")
-                        home_team_id = f.get("teams", {}).get("home", {}).get("id")
-                        away_team_id = f.get("teams", {}).get("away", {}).get("id")
-                        
-                        # Save the discovered IDs back to the match
-                        match["api_football_fixture_id"] = af_fixture_id
-                        match["home_team_id"] = home_team_id
-                        match["away_team_id"] = away_team_id
-                        self.db.save_matches([match])
-                        break
+            # Resolve 3-letter codes to full names using the FIFA mapping
+            raw_home = match.get("home_team_name", "")
+            raw_away = match.get("away_team_name", "")
+            home_full = _CODE_TO_NAME.get(raw_home.upper(), raw_home)
+            away_full = _CODE_TO_NAME.get(raw_away.upper(), raw_away)
+            
+            if not af_fixture_id:
+                # Use closing_time (Jump Trading's field) to find the match date
+                time_str = match.get("closing_time") or match.get("opening_time")
+                if time_str:
+                    date_str = time_str.split("T")[0]
+                    fixtures = self.api_football.get_fixtures_by_date(date_str)
+                    for f in fixtures:
+                        t_home = f.get("teams", {}).get("home", {}).get("name", "").lower()
+                        t_away = f.get("teams", {}).get("away", {}).get("name", "").lower()
+                        h = home_full.lower()
+                        a = away_full.lower()
+                        if (h in t_home or t_home in h) and (a in t_away or t_away in a):
+                            af_fixture_id = f.get("fixture", {}).get("id")
+                            home_team_id = f.get("teams", {}).get("home", {}).get("id")
+                            away_team_id = f.get("teams", {}).get("away", {}).get("id")
+                            
+                            # Save the discovered IDs and resolved full names back to the match
+                            match["api_football_fixture_id"] = af_fixture_id
+                            match["home_team_id"] = home_team_id
+                            match["away_team_id"] = away_team_id
+                            match["home_team_name_full"] = home_full
+                            match["away_team_name_full"] = away_full
+                            self.db.save_matches([match])
+                            logger.info(f"Discovered API-Football fixture {af_fixture_id} for {home_full} vs {away_full}")
+                            break
             
             if af_fixture_id:
                 # Update recent matches to capture friendlies/qualifiers played since bootstrap
                 if self._should_refresh(match, "recent_matches", hours=None):
                     for tid in [home_team_id, away_team_id]:
                         if tid:
-                            team_name = match.get("home_team_name") if tid == home_team_id else match.get("away_team_name")
+                            team_name = home_full if tid == home_team_id else away_full
                             self._update_team_goals(tid, team_name, match)
                                 
                 # Lazy Load Advanced Statistics (Corners, Fouls, Cards)
@@ -331,7 +348,7 @@ class DataCollector:
                         if tid:
                             stats = self.api_football.get_team_stats(tid, season, league_id)
                             if not stats:
-                                team_name = match.get("home_team_name") if tid == home_team_id else match.get("away_team_name")
+                                team_name = home_full if tid == home_team_id else away_full
                                 logger.info(f"API-Football skipped for stats of {team_name}, falling back to Football-Data.org")
                                 stats = self.football_data.get_team_stats(team_name)
                             
@@ -351,23 +368,28 @@ class DataCollector:
                         if tid:
                             players = self.api_football.get_top_players(tid, season)
                             if not players:
-                                team_name = match.get("home_team_name") if tid == home_team_id else match.get("away_team_name")
+                                team_name = home_full if tid == home_team_id else away_full
                                 logger.info(f"API-Football skipped for players of {team_name}, falling back to Football-Data.org")
                                 players = self.football_data.get_top_players(team_name)
                             self.db.update_players(tid, players)
 
             # Extensive News & AI-Mined Stats
             if self._should_refresh(match, "news", hours=3):
-                headlines = self.news_scraper.scrape_all_feeds(match)
+                # Enrich match data with full names for better news scraping and AI context
+                enriched_match = dict(match)
+                enriched_match["home_team_name"] = home_full
+                enriched_match["away_team_name"] = away_full
+                
+                headlines = self.news_scraper.scrape_all_feeds(enriched_match)
                 previous_briefing = self.db.get_news(match.get("id"))
                 
-                briefing = self.ai.summarize_news(headlines, previous_briefing, match)
-                structured = self.ai.extract_stats(headlines, match)
+                briefing = self.ai.summarize_news(headlines, previous_briefing, enriched_match)
+                structured = self.ai.extract_stats(headlines, enriched_match)
                 
                 self.db.save_news(match.get("id"), briefing, headlines, structured)
                 
                 # Inject AI-Mined Advanced Stats (Corners/Cards) if API-Football is completely dead
-                for tid, tname in [(home_team_id, match.get("home_team_name")), (away_team_id, match.get("away_team_name"))]:
+                for tid, tname in [(home_team_id, home_full), (away_team_id, away_full)]:
                     if tid and structured:
                         team_doc = self.db.get_team(tid)
                         if team_doc:
@@ -407,6 +429,15 @@ class DataCollector:
         match = self.db.get_match(match_id)
         if not match:
             return False
+        
+        # Resolve 3-letter codes to full names
+        raw_home = match.get("home_team_name", "")
+        raw_away = match.get("away_team_name", "")
+        home_full = _CODE_TO_NAME.get(raw_home.upper(), raw_home)
+        away_full = _CODE_TO_NAME.get(raw_away.upper(), raw_away)
+        enriched_match = dict(match)
+        enriched_match["home_team_name"] = home_full
+        enriched_match["away_team_name"] = away_full
             
         af_fixture_id = match.get("api_football_fixture_id")
         changes_detected = False
@@ -419,17 +450,17 @@ class DataCollector:
             # Compare with DB (simple check, assume anything fetched is "changes" for now)
             changes_detected = True 
             
-        latest_headlines = self.news_scraper.quick_scan(match)
+        latest_headlines = self.news_scraper.quick_scan(enriched_match)
         if latest_headlines:
             changes_detected = True
             
         if changes_detected:
             old_briefing = self.db.get_news(match_id)
             # Update briefing with new info
-            new_briefing = self.ai.summarize_news(latest_headlines, old_briefing, match)
+            new_briefing = self.ai.summarize_news(latest_headlines, old_briefing, enriched_match)
             # For quick refresh, we might skip deep structured stats extraction to save time/tokens,
             # but we'll do it if it's cheap enough.
-            structured = self.ai.extract_stats(latest_headlines, match)
+            structured = self.ai.extract_stats(latest_headlines, enriched_match)
             self.db.save_news(match_id, new_briefing, latest_headlines, structured)
             
             # Update the match doc
