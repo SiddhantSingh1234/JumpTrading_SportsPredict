@@ -300,7 +300,7 @@ class DataCollector:
             # --------------------------------------------------------
             # STEP 2: Scrape news + AI summarization + AI stats extraction
             # --------------------------------------------------------
-            if self._should_refresh(match, "news", hours=3):
+            if self._should_refresh(match, "news", hours=2.5):
                 logger.info(f"Scraping news for {home_full} vs {away_full}...")
                 
                 headlines = self.news_scraper.scrape_all_feeds(enriched_match)
