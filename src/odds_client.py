@@ -83,18 +83,21 @@ class OddsClient:
             return []
 
         url = f"{Config.ODDS_API_BASE_URL}/sports/{Config.ODDS_API_SPORT}/odds"
+        # The bulk /odds endpoint only supports h2h, totals, spreads. (btts is an
+        # event-only/premium market — requesting it 422s the whole call. Our
+        # Dixon-Coles model covers BTTS without odds.)
         params = {
             "apiKey": self.key,
             "regions": "uk,eu",
-            "markets": "h2h,totals,btts",
+            "markets": "h2h,totals",
             "oddsFormat": "decimal",
         }
         try:
             resp = requests.get(url, params=params, timeout=30)
-            self._record(1)  # any successful HTTP round-trip consumes 1 request
             if resp.status_code != 200:
                 logger.warning(f"Odds API {resp.status_code}: {resp.text[:160]}")
                 return []
+            self._record(1)  # count only successful requests (matches API quota)
             events = resp.json()
         except Exception as e:
             logger.warning(f"Odds API request failed: {e}")

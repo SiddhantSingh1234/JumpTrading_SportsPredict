@@ -2,7 +2,46 @@
 
 **Goal:** dramatically raise our Smart Rating (cumulative Relative Brier Points percentile) on the Jump Trading Probability Cup. Everything proposed here is **100% free**.
 
-This document (1) explains the competition and what actually drives score, (2) diagnoses *why the current system scores poorly* with concrete file references, and (3) lays out a prioritized set of changes. Implementation comes after you approve the plan.
+This document (1) explains the competition and what actually drives score, (2) diagnoses *why the current system scores poorly* with concrete file references, and (3) lays out a prioritized set of changes.
+
+---
+
+## ✅ Implementation Status (updated 2026-06-18)
+
+**Tiers 0–5 are implemented, wired, and logic-tested. Tier 6 skipped (per decision). Tier 7 verified.**
+
+| Tier | Item | Status |
+|---|---|---|
+| **0.1** | Empty/partial-AI no longer submits blanket 50 — backfills from the informed model per market | ✅ |
+| **0.2** | Gemini model IDs verified live; Firestore daily-quota caps (20/500/1500) + fallback cascade + per-call model logging; `self_test()` | ✅ |
+| **0.3** | Team-aware market logic (`_detect_subject`) | ✅ |
+| **0.4** | False "1.5/1.0" prompt removed; per-market `model_confidence` flag | ✅ |
+| **1.1** | martj42 international-results dataset → real team rates + player anytime-scorer rates | ✅ |
+| **1.2** | Self-computed Elo → win/draw/loss + expected goals | ✅ |
+| **1.3** | The Odds API client (devig, monthly-quota-tracked); blended into result/totals/BTTS. Key `soccer_fifa_world_cup` verified | ✅ |
+| **1.4** | Structural base-rate table + full market mapper (never 0.50) | ✅ |
+| **1.5** | RSS overlay + Gemini Google-Search grounding for confirmed lineups (separate 1500/day pool) | ✅ |
+| **1.6** | Crowd sentiment: Reddit/PRAW (r/SoccerBetting, r/soccer, r/worldcup, r/football) **or** grounded-search fallback over the same subs → Bot 2 | ✅ |
+| **2.1** | Dixon–Coles bivariate goals model (hybrid: DC for full-time goal markets, MC for half-specific/corners) | ✅ |
+| **2.2–2.4** | All observed market types mapped; analytic peripheral modeling; base-rate fallback | ✅ |
+| **3.1–3.2** | Honest calibrated probs (no blanket 15–85 clamp); crowd-divergence rules (fade compound-AND, name-anchored coin-flips) | ✅ |
+| **3.3** | Stage weighting (date-inferred 1×/2×/3×) + variance stance (`COMPETITION_STANCE`, manual from leaderboard) | ✅ |
+| **4.1–4.3** | AI repositioned as adjuster over model+odds+base+news; prompts rewritten; two genuinely different bots | ✅ |
+| **5.1–5.3** | Calibration loop: score `/results`, recover outcomes from Brier, isotonic+shrinkage recalibration per category, bias report + AI notes; applied at predict time | ✅ |
+| **6** | PATCH refinement timing | ⏭️ skipped |
+| **7.1** | Robust threshold parsing (`N or more`/`over N.5`/`N or fewer`/`under`) | ✅ verified |
+| **7.2 / 7.3** | `opening_time`=kickoff confirmed; secrets gitignored | ✅ |
+
+**New modules added:** `intl_data.py` (dataset + Elo + scorers), `team_names.py`, `base_rates.py`, `market_model.py` (the mapper), `dixon_coles.py`, `calibration.py` (isotonic+shrinkage), `odds_client.py`, `reddit_sentiment.py`. **Rewritten:** `predictor.py`, `engine.py`, `calibrator.py`. **Extended:** `ai_client.py` (quota tracking, grounding, grounded sentiment, sentiment extraction), `collector.py`, `database.py`, `config.py`, `main.py`, the three workflow YAMLs, `requirements.txt` (+`praw`).
+
+**Key operational settings (env / GitHub Secrets):**
+- Required: `GEMINI_API_KEY`, `FIREBASE_CREDENTIALS`, `SPORTSPREDICT_BOT1/2_KEY`.
+- Optional: `ODDS_API_KEY` (else odds off), Reddit creds (else grounded-sentiment fallback), `COMPETITION_STANCE` (`neutral`/`climb`/`defend`), `GROUP_STAGE_END_DATE` / `FINAL_DATE` (stage cutoffs).
+- **`CALIBRATION_SINCE_DATE`** — set to your go-live date (e.g. `2026-06-18`) so the new pipeline is **not** calibrated on the old bad bot's settled predictions.
+
+**Quotas & free-tier safety:** predictions use `gemini-3.5-flash` (20/day) cascading → `gemini-3.1-flash-lite` (500/day) → informed quant model (never 50/50); grounding on a separate 1500/day pool; odds capped at 480/month; all counters tracked in Firestore across the ephemeral GitHub Actions runs.
+
+**Known limitations (by design / honest):** peripheral stats (corners/fouls/cards/SoT/offsides) have no free per-team source, so they use structural base rates tilted by Elo (calibration corrects systematic bias over time); the variance stance is manual (API hides our rank); calibration activates once the new system has its own settled results.
 
 ---
 

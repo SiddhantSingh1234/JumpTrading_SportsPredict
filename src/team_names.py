@@ -55,8 +55,10 @@ def to_dataset_name(fifa_name: str) -> str:
 
 
 def to_canonical(raw_name: str) -> str:
-    """Best-effort: map any inbound spelling to our canonical FIFA name."""
+    """Best-effort: map any inbound spelling (odds feed, Reddit, news) to our
+    canonical FIFA name. Normalises '&' -> 'and' so e.g. the odds feed's
+    'Bosnia & Herzegovina' matches our 'Bosnia and Herzegovina'."""
     if not raw_name:
         return raw_name
-    cleaned = raw_name.strip()
+    cleaned = raw_name.strip().replace(" & ", " and ")
     return _INBOUND_ALIASES.get(cleaned.lower(), cleaned)
