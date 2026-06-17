@@ -97,7 +97,14 @@ class Calibrator:
         if skipped_old:
             logger.info(f"Calibration: skipped {skipped_old} pre-{since} results (old bot).")
         if scored == 0:
-            logger.info("No scorable settled results found (after date filter).")
+            # Only clear when the date cutoff removed everything (all results were
+            # pre-cutoff old-bot ones) — so we don't wipe a good accumulated map
+            # on a future run that just happens to have no new settled results.
+            if skipped_old:
+                self.db.save_state("calibration", {})
+                logger.info("All settled results were pre-cutoff; cleared calibration map (identity).")
+            else:
+                logger.info("No scorable settled results found.")
             return
 
         # Fit + persist the recalibration map for the predict run to apply.

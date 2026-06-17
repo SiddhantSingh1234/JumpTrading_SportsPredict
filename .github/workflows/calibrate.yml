@@ -28,6 +28,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          CALIBRATION_SINCE_DATE: ${{ secrets.CALIBRATION_SINCE_DATE }}
           FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
         run: python src/main.py calibrate
 
