@@ -31,6 +31,7 @@ jobs:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+          COMPETITION_STANCE: ${{ secrets.COMPETITION_STANCE }}
           FIREBASE_CREDENTIALS_PATH: ./firebase-credentials.json
         run: python src/main.py predict
 
