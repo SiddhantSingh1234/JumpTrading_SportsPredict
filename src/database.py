@@ -178,15 +178,22 @@ class Database:
         query = self.db.collection("markets").where("match_id", "==", match_id)
         return [doc.to_dict() for doc in query.stream()]
 
+    def get_market(self, market_id):
+        doc = self.db.collection("markets").document(str(market_id)).get()
+        return doc.to_dict() if doc.exists else None
+
     # --- News & Context ---
 
     def save_news(self, match_id, briefing, headlines, structured_stats=None):
         doc_ref = self.db.collection("news").document(str(match_id))
-        data = {
-            "briefing": briefing,
-            "headlines": headlines,
-            "updated_at": datetime.utcnow().isoformat()
-        }
+        data = {"updated_at": datetime.utcnow().isoformat()}
+        # Only overwrite the briefing/headlines with real, non-empty values so a
+        # failed or empty summary never clobbers good prior news (merge=True
+        # preserves the existing fields we omit here).
+        if isinstance(briefing, str) and briefing.strip():
+            data["briefing"] = briefing
+        if headlines:
+            data["headlines"] = headlines
         if structured_stats:
             data["structured_stats"] = structured_stats
         doc_ref.set(data, merge=True)
@@ -198,6 +205,16 @@ class Database:
     def get_structured_news(self, match_id):
         doc = self.db.collection("news").document(str(match_id)).get()
         return doc.to_dict().get("structured_stats", {}) if doc.exists else {}
+
+    def save_sentiment(self, match_id, sentiment):
+        self.db.collection("news").document(str(match_id)).set(
+            {"crowd_sentiment": sentiment, "updated_at": datetime.utcnow().isoformat()},
+            merge=True,
+        )
+
+    def get_sentiment(self, match_id):
+        doc = self.db.collection("news").document(str(match_id)).get()
+        return doc.to_dict().get("crowd_sentiment", {}) if doc.exists else {}
 
     # --- Simulations ---
 
@@ -292,8 +309,28 @@ class Database:
         doc = self.db.collection("state").document("config").get()
         return doc.to_dict().get(key) if doc.exists else None
 
+    # --- AI usage / quota tracking (per UTC day, shared across Action runs) ---
+
+    def get_ai_usage(self, model=None):
+        """Return today's AI call counts. dict if model is None, else int."""
+        day = datetime.utcnow().date().isoformat()
+        doc = self.db.collection("ai_usage").document(day).get()
+        data = doc.to_dict() if doc.exists else {}
+        if model is not None:
+            return int(data.get(model, 0) or 0)
+        return {k: v for k, v in data.items() if k != "updated_at"}
+
+    def incr_ai_usage(self, model, n=1):
+        """Atomically increment today's call count for a model."""
+        day = datetime.utcnow().date().isoformat()
+        ref = self.db.collection("ai_usage").document(day)
+        ref.set(
+            {model: firestore.Increment(n), "updated_at": datetime.utcnow().isoformat()},
+            merge=True,
+        )
+
     # --- Usage tracking ---
-    
+
     def count_predictions_today(self):
         """Count how many predictions were submitted today to monitor quotas."""
         today_iso = datetime.utcnow().date().isoformat()

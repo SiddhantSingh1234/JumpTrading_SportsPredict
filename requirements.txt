@@ -8,3 +8,4 @@ feedparser
 python-dotenv
 fastapi
 uvicorn
+praw

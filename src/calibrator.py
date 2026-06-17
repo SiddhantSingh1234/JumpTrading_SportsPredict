@@ -1,78 +1,163 @@
 import logging
+
+from src import calibration
 from src.database import Database
+from src.market_classifier import MarketClassifier
 
 logger = logging.getLogger(__name__)
+
+
+def _to_prob01(p):
+    """Results return probability as a 1-99 integer (or 0-1 decimal). Normalise."""
+    if p is None:
+        return None
+    p = float(p)
+    return p / 100.0 if p > 1.0 else p
+
+
+def _outcome_from_brier(p, brier):
+    """Recover the binary outcome from (prob, brier): brier=(p-o)^2, o in {0,1}."""
+    if p is None or brier is None:
+        return None
+    b1 = (p - 1.0) ** 2  # if outcome was 1
+    b0 = p ** 2          # if outcome was 0
+    return 1 if abs(brier - b1) <= abs(brier - b0) else 0
+
+
+def _result_field(entry, *keys):
+    for k in keys:
+        if k in entry and entry[k] is not None:
+            return entry[k]
+    return None
+
 
 class Calibrator:
     def __init__(self, db: Database, sp_api, ai_client=None):
         self.db = db
         self.sp_api = sp_api
         self.ai = ai_client
-        
+        # Regex-only classifier (no AI calls) to categorise the question text
+        # that /results returns directly.
+        self.classifier = MarketClassifier(None)
+
     def run_full_calibration(self):
-        """Runs daily to fetch results, score predictions, and adjust models."""
-        logger.info("Starting daily calibration run.")
-        
-        # 1. Fetch settled results from SportsPredict API
+        """Daily: score settled results, fit a recalibration map per market
+        category, detect per-category bias, and persist for the predict run."""
+        logger.info("Starting calibration run.")
         results = self.sp_api.get_results()
-        
         if not results:
-            logger.info("No new results to process.")
+            logger.info("No settled results to process.")
             return
 
-        # We'd process the results here. 
-        # The API format isn't fully defined for results, but let's assume it provides 
-        # a list of market IDs and their actual outcomes (0 or 1).
-        
-        # In a real scenario, we would:
-        # a. Fetch our predictions for these markets from Firestore
-        # b. Calculate our Brier Score: (prediction - outcome)^2
-        # c. Fetch the crowd's probability (if available from SP API)
-        # d. Calculate RBP: (crowd_brier - our_brier) * 100
-        # e. Update team/player rolling averages based on actual match stats (via API-Football or SP)
-        
-        logger.info(f"Processed {len(results)} market results.")
-        
-        # Analytics via AI
-        if self.ai:
-            self._analyze_calibration_bias()
+        samples = []          # (category, prob01, outcome)
+        per_cat = {}          # category -> {"n", "sum_brier", "sum_p", "sum_o"}
+        total_brier = 0.0
+        scored = 0
 
-    def _analyze_calibration_bias(self):
-        """Use Gemma 4 31B to analyze recent prediction bias."""
-        # E.g. "We are consistently underestimating total goals in group stage matches."
-        logger.info("Analyzing calibration bias.")
-        pass
+        from src.config import Config
+        since = Config.CALIBRATION_SINCE_DATE
+        skipped_old = 0
+
+        for entry in results:
+            # Only settled markets are scored.
+            status = entry.get("market_status")
+            if status and status != "settled":
+                continue
+            # Skip results from before the new system went live (don't calibrate
+            # the new pipeline on the old bad bot's predictions).
+            if since:
+                cd = entry.get("created_date", "")
+                if cd and cd[:10] < since:
+                    skipped_old += 1
+                    continue
+            prob = _to_prob01(_result_field(entry, "probability_submitted", "probability", "prob"))
+            brier = _result_field(entry, "brier_score", "brierscore", "brier")
+            if prob is None or brier is None:
+                continue
+            outcome = _outcome_from_brier(prob, brier)
+            if outcome is None:
+                continue
+
+            # The result includes the question text -> classify it directly
+            # (regex only, no AI cost) instead of needing a stored market doc.
+            question = entry.get("question", "")
+            cls = self.classifier.classify({"question_text": question}) or {}
+            mtype = cls.get("type", "unknown")
+            cat = calibration.category_for(mtype)
+
+            samples.append((cat, prob, outcome))
+            total_brier += float(brier)
+            scored += 1
+            agg = per_cat.setdefault(cat, {"n": 0, "sum_brier": 0.0, "sum_p": 0.0, "sum_o": 0.0})
+            agg["n"] += 1
+            agg["sum_brier"] += float(brier)
+            agg["sum_p"] += prob
+            agg["sum_o"] += outcome
+
+        if skipped_old:
+            logger.info(f"Calibration: skipped {skipped_old} pre-{since} results (old bot).")
+        if scored == 0:
+            logger.info("No scorable settled results found (after date filter).")
+            return
+
+        # Fit + persist the recalibration map for the predict run to apply.
+        calib = calibration.fit(samples)
+        self.db.save_state("calibration", calib)
+
+        # Per-category bias report (mean predicted vs realised) for visibility.
+        report = {"overall_brier": round(total_brier / scored, 4), "scored": scored, "by_category": {}}
+        for cat, agg in per_cat.items():
+            n = agg["n"]
+            mean_p = agg["sum_p"] / n
+            mean_o = agg["sum_o"] / n
+            report["by_category"][cat] = {
+                "n": n,
+                "brier": round(agg["sum_brier"] / n, 4),
+                "mean_pred": round(mean_p, 4),
+                "mean_actual": round(mean_o, 4),
+                "bias": round(mean_p - mean_o, 4),  # +ve = we over-predict this category
+            }
+        self.db.save_state("calibration_report", report)
+        logger.info(f"Calibration complete: {scored} settled, overall Brier {report['overall_brier']}.")
+        for cat, r in report["by_category"].items():
+            logger.info(f"  [{cat}] n={r['n']} brier={r['brier']} bias={r['bias']:+.3f}")
+
+        if self.ai:
+            self._ai_bias_summary(report)
+
+    def _ai_bias_summary(self, report):
+        try:
+            import json
+            from src.config import Config
+            from google.genai import types
+            prompt = (
+                "These are our prediction calibration stats per market category "
+                "(bias>0 = we over-predict). In under 120 words, name the 2-3 biggest "
+                f"systematic biases to correct:\n{json.dumps(report, indent=1)}"
+            )
+            resp = self.ai._safe_generate(
+                model=Config.GEMINI_STATS_MODEL,
+                contents=prompt,
+                fallback_models=["gemma-4-31b-it"],
+            )
+            self.db.save_state("calibration_notes", resp.text)
+            logger.info(f"Calibration notes: {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"AI bias summary failed: {e}")
+
+    # ------------------------------------------------------------------ #
 
     def get_dashboard_data(self):
-        """Data for the local query bot dashboard."""
+        report = self.db.get_state("calibration_report") or {}
         preds = self.db.get_predictions()
-        if not preds:
-            return {
-                "overall_rbp": 0.0,
-                "bot1_rbp": 0.0,
-                "bot2_rbp": 0.0,
-                "best_market": "N/A",
-                "worst_market": "N/A"
-            }
-            
-        bot1_count = sum(1 for p in preds if p.get("bot_number") == 1)
-        bot2_count = sum(1 for p in preds if p.get("bot_number") == 2)
-        
-        # Real RBP requires match results which are processed during run_full_calibration().
-        # We will surface the aggregated RBP stored in state or sum it.
-        # For this implementation, we report the number of predictions as a health check 
-        # since true RBP isn't known until markets settle.
-        
         return {
-            "overall_rbp": self.db.get_state("overall_rbp") or 0.0,
-            "bot1_rbp": self.db.get_state("bot1_rbp") or 0.0,
-            "bot2_rbp": self.db.get_state("bot2_rbp") or 0.0,
-            "total_predictions_bot1": bot1_count,
-            "total_predictions_bot2": bot2_count,
-            "best_market": self.db.get_state("best_market") or "N/A",
-            "worst_market": self.db.get_state("worst_market") or "N/A"
+            "overall_brier": report.get("overall_brier"),
+            "scored": report.get("scored", 0),
+            "by_category": report.get("by_category", {}),
+            "total_predictions_bot1": sum(1 for p in preds if p.get("bot_number") == 1),
+            "total_predictions_bot2": sum(1 for p in preds if p.get("bot_number") == 2),
+            "notes": self.db.get_state("calibration_notes") or "",
         }
 
     def get_latest_report(self):
-        """Return the latest AI calibration report."""
-        return "Everything looks well calibrated. No major adjustments needed."
+        return self.db.get_state("calibration_report") or {"status": "no data yet"}

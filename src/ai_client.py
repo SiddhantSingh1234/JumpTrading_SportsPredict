@@ -22,9 +22,14 @@ MAX_RETRIES = 2
 DEFAULT_RETRY_WAIT = 30
 
 
+class QuotaExceeded(Exception):
+    """Raised when a model's daily request cap is reached and no fallback remains."""
+
+
 class AIClient:
-    def __init__(self, api_key):
+    def __init__(self, api_key, db=None):
         self.api_key = api_key
+        self.db = db  # Database, for cross-run daily quota tracking (Firestore)
         # Set a 15-minute HTTP timeout — model is allowed to think deeply
         self.client = genai.Client(
             api_key=self.api_key,
@@ -32,6 +37,30 @@ class AIClient:
         )
         # Track the last call timestamp per model for rate-limiting.
         self._last_call_time: dict[str, float] = {}
+        # Daily-quota state: a snapshot of today's counts loaded once per run,
+        # plus an in-process counter for calls made during this run.
+        self._caps = Config.GEMINI_DAILY_CAPS
+        self._session_counts: dict[str, int] = {}
+        try:
+            self._daily_base = self.db.get_ai_usage() if self.db else {}
+        except Exception as e:
+            logger.warning(f"Could not load AI usage counts: {e}")
+            self._daily_base = {}
+
+    def _budget_left(self, model) -> bool:
+        cap = self._caps.get(model)
+        if cap is None:
+            return True  # uncapped model
+        used = int(self._daily_base.get(model, 0)) + self._session_counts.get(model, 0)
+        return used < cap
+
+    def _record_call(self, model) -> None:
+        self._session_counts[model] = self._session_counts.get(model, 0) + 1
+        if self.db:
+            try:
+                self.db.incr_ai_usage(model)
+            except Exception as e:
+                logger.warning(f"Could not record AI usage for {model}: {e}")
 
     def _wait_for_rate_limit(self, model: str) -> None:
         """Block until enough time has passed since the last call to this model."""
@@ -45,7 +74,7 @@ class AIClient:
             )
             time.sleep(wait)
 
-    def _safe_generate(self, model, contents, config=None, fallback_models=None):
+    def _safe_generate(self, model, contents, config=None, fallback_models=None, usage_key=None):
         """
         Wrapper around client.models.generate_content.
         1. Enforces a minimum interval between consecutive calls to the same model.
@@ -60,9 +89,29 @@ class AIClient:
         current_model = model
         fallback_queue = list(fallback_models)
         attempts_on_current = 0
-        
+
+        # Usage is tracked under usage_key if given (e.g. grounding pool),
+        # otherwise per-model.
+        def cap_key(m):
+            return usage_key or m
+
         while True:
             attempts_on_current += 1
+
+            # Proactive daily-quota guard (shared across Action runs via Firestore).
+            if not self._budget_left(cap_key(current_model)):
+                logger.warning(
+                    f"Daily cap reached for {cap_key(current_model)} "
+                    f"(cap={self._caps.get(cap_key(current_model))})."
+                )
+                if fallback_queue:
+                    next_model = fallback_queue.pop(0)
+                    logger.warning(f"Quota: shifting {current_model} -> {next_model}")
+                    current_model = next_model
+                    attempts_on_current = 0
+                    continue
+                raise QuotaExceeded(f"Daily cap reached for {cap_key(current_model)} and no fallback left.")
+
             self._wait_for_rate_limit(current_model)
 
             try:
@@ -71,6 +120,8 @@ class AIClient:
                 if config is not None:
                     kwargs["config"] = config
                 response = self.client.models.generate_content(**kwargs)
+                self._record_call(cap_key(current_model))
+                logger.info(f"AI call OK on {current_model}")
                 return response
             except Exception as e:
                 error_str = str(e)
@@ -117,6 +168,107 @@ class AIClient:
                 else:
                     raise
 
+    def grounded_team_news(self, match_data):
+        """Use Google Search grounding to fetch CONFIRMED lineups, injuries and
+        late team news at predict time. Uses the separate grounding quota pool
+        (gemini-2.5, 1500/day) so it never competes with the prediction budget.
+        Returns a concise briefing string, or '' on failure / quota exhaustion.
+        """
+        home = match_data.get("home_team_name") or match_data.get("name", "")
+        away = match_data.get("away_team_name", "")
+        prompt = (
+            f"Search for the very latest on the upcoming FIFA World Cup 2026 match "
+            f"{home} vs {away}. Report ONLY confirmed facts in under 150 words: "
+            f"confirmed/probable starting lineups, injuries, suspensions, key players "
+            f"rested or returning, and whether either team is already qualified/eliminated "
+            f"(motivation). If lineups are not yet confirmed, say so."
+        )
+        try:
+            grounding_tool = types.Tool(google_search=types.GoogleSearch())
+            response = self._safe_generate(
+                model=Config.GEMINI_GROUNDING_MODEL,
+                contents=prompt,
+                usage_key=Config.GROUNDING_USAGE_KEY,
+                config=types.GenerateContentConfig(tools=[grounding_tool]),
+            )
+            return response.text or ""
+        except Exception as e:
+            logger.warning(f"Grounded team news failed: {e}")
+            return ""
+
+    @staticmethod
+    def _parse_json_text(text):
+        """Extract a JSON object from model text (handles ``` fences / prose).
+        Grounded calls can't force a JSON mime type, so we parse defensively."""
+        if not text:
+            return {}
+        t = text.strip()
+        if t.startswith("```"):
+            t = t.strip("`")
+            if t.lower().startswith("json"):
+                t = t[4:]
+        start, end = t.find("{"), t.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(t[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        try:
+            return json.loads(t)
+        except json.JSONDecodeError:
+            return {}
+
+    def grounded_sentiment(self, match_data):
+        """Fallback crowd-sentiment via Google Search grounding when the Reddit
+        API isn't configured. Targets the SAME subreddits as the PRAW path so it
+        captures the same crowd. Uses the grounding quota pool; returns {} on
+        failure."""
+        home = match_data.get("home_team_name") or match_data.get("name", "")
+        away = match_data.get("away_team_name", "")
+        subs = ", ".join(f"r/{s}" for s in Config.REDDIT_SUBREDDITS)
+        prompt = (
+            f"Search Reddit — specifically {subs} (reddit.com) — and other public "
+            f"betting/fan discussion for the upcoming FIFA World Cup 2026 match "
+            f"{home} vs {away}. Assess what the CASUAL PUBLIC / betting crowd believes.\n\n"
+            f"Output ONLY a JSON object (no prose, no code fences) with keys:\n"
+            f'{{"public_favorite": "<team or none>", "lean_strength": <0.0-1.0>, '
+            f'"hype_level": <0.0-1.0>, "betting_consensus": "<short phrase or none>", '
+            f'"overhyped_players": ["..."], "key_info": ["confirmed lineups/injuries if any"], '
+            f'"source": "grounded"}}'
+        )
+        try:
+            grounding_tool = types.Tool(google_search=types.GoogleSearch())
+            response = self._safe_generate(
+                model=Config.GEMINI_GROUNDING_MODEL,
+                contents=prompt,
+                usage_key=Config.GROUNDING_USAGE_KEY,
+                config=types.GenerateContentConfig(tools=[grounding_tool]),
+            )
+            data = self._parse_json_text(response.text)
+            if data:
+                data.setdefault("source", "grounded")
+            return data
+        except Exception as e:
+            logger.warning(f"Grounded sentiment failed: {e}")
+            return {}
+
+    def self_test(self):
+        """Lightweight sanity check: confirm the key + each configured model are
+        reachable. Costs a few small calls — call manually, not in the hot path."""
+        results = {}
+        models = {
+            "predict": Config.GEMINI_PREDICT_MODEL,
+            "summary": Config.GEMINI_SUMMARY_MODEL,
+            "stats": Config.GEMINI_STATS_MODEL,
+        }
+        for role, model in models.items():
+            try:
+                r = self.client.models.generate_content(model=model, contents="Reply with OK.")
+                results[role] = f"{model}: {'OK' if r.text else 'empty'}"
+            except Exception as e:
+                results[role] = f"{model}: ERROR {str(e)[:80]}"
+        return results
+
     def summarize_news(self, headlines, previous_briefing, match_data):
         """Use Flash Lite to summarize news into a concise briefing."""
         logger.info("Summarizing news via AI...")
@@ -132,11 +284,14 @@ Synthesize the new headlines with the previous briefing. Extract key injuries, l
             response = self._safe_generate(
                 model=Config.GEMINI_SUMMARY_MODEL,
                 contents=prompt,
+                fallback_models=["gemma-4-31b-it"],
             )
             return response.text
         except Exception as e:
             logger.warning(f"AI summarize_news failed (likely high demand): {e}")
-            return "News briefing temporarily unavailable."
+            # Preserve prior knowledge rather than clobbering it with an error
+            # string — the caller will keep the previous briefing.
+            return previous_briefing or ""
 
     def extract_stats(self, headlines, match_data):
         """Use Gemini to extract structured JSON stats from news."""
@@ -163,11 +318,45 @@ Example: {{
             response = self._safe_generate(
                 model=Config.GEMINI_STATS_MODEL,
                 contents=prompt,
+                fallback_models=["gemma-4-31b-it"],
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
             return json.loads(response.text)
         except Exception as e:
             logger.warning(f"AI extract_stats failed: {e}")
+            return {}
+
+    def extract_sentiment(self, reddit_bundle, match_data):
+        """Turn raw Reddit posts/comments into a structured crowd-sentiment
+        signal for Bot 2 to fade. Uses gemma (1500/day pool). Returns {} on
+        failure or empty input."""
+        if not reddit_bundle:
+            return {}
+        home = match_data.get("home_team_name") or match_data.get("name", "")
+        away = match_data.get("away_team_name", "")
+        prompt = f"""You are analysing Reddit discussion to estimate PUBLIC SENTIMENT (the crowd) for the match {home} vs {away}. Weight by upvote score.
+Reddit data (titles, scores, top comments):
+{json.dumps(reddit_bundle, indent=1)[:6000]}
+
+Output strict JSON estimating what the casual public believes:
+{{
+  "public_favorite": "<team name or 'none'>",
+  "lean_strength": <0.0-1.0, how strongly the public favors that side>,
+  "hype_level": <0.0-1.0, how much hype/euphoria around stars or big nations>,
+  "betting_consensus": "<short phrase, e.g. 'over 2.5 popular', 'Spain -1.5 public side', or 'none'>",
+  "overhyped_players": ["<player names the public is excited about>"],
+  "key_info": ["<any hard facts: confirmed lineups, injuries, suspensions>"]
+}}"""
+        try:
+            response = self._safe_generate(
+                model=Config.GEMINI_STATS_MODEL,
+                contents=prompt,
+                fallback_models=["gemma-4-31b-it"],
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            return json.loads(response.text)
+        except Exception as e:
+            logger.warning(f"AI extract_sentiment failed: {e}")
             return {}
 
     def classify_market(self, question, match_data):
@@ -198,7 +387,7 @@ Return strict JSON with 'type' (e.g., match_result, total_goals, player_goal) an
             response = self._safe_generate(
                 model=Config.GEMINI_PREDICT_MODEL,
                 contents=user_prompt,
-                fallback_models=["gemini-3-flash-preview", "gemini-2.5-flash"],
+                fallback_models=Config.GEMINI_PREDICT_FALLBACKS,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     response_mime_type="application/json",

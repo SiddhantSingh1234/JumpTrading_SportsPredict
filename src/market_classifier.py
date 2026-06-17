@@ -9,41 +9,52 @@ class MarketClassifier:
     def __init__(self, ai_client=None):
         self.ai = ai_client
         
+        # Order matters: more specific patterns first. Player props are checked
+        # before team thresholds so "[player] ... shot on target" isn't grabbed
+        # by the generic team shots-on-target rule.
         self.patterns = {
-            "match_result": [r"(?i)will .+ win", r"(?i)will .+ beat", r"(?i)to win the match"],
-            "total_goals": [r"(?i)\d+ or more total goals", r"(?i)over .+ goals", r"(?i)\+ goals"],
-            "both_teams_score": [r"(?i)both teams score", r"(?i)btts"],
-            "half_goals_comparison": [r"(?i)second half.*more.*goals", r"(?i)first half.*more.*goals"],
-            "half_specific_goals": [r"(?i)score in the first half", r"(?i)score in the second half"],
-            "corners_comparison": [r"(?i)more corners than", r"(?i)corner kick.*more"],
-            "corners_threshold": [r"(?i)corner kick", r"(?i)corners"],
-            "fouls_comparison": [r"(?i)commit more fouls"],
-            "cards_threshold": [r"(?i)card", r"(?i)yellow", r"(?i)red"],
-            "offsides_threshold": [r"(?i)offside"],
+            "match_result": [r"(?i)will .+ win the match", r"(?i)will .+ win\b", r"(?i)will .+ beat"],
+            "both_teams_score": [r"(?i)both teams (to )?score", r"(?i)\bbtts\b"],
+            "half_goals_comparison": [r"(?i)(second|first) half.*more.*goals",
+                                       r"(?i)more goals than the (first|second) half"],
+            "total_goals": [r"(?i)\d+ or more total goals", r"(?i)\d+ or fewer total goals",
+                             r"(?i)over [\d.]+ .*goals", r"(?i)under [\d.]+ .*goals"],
+            "half_specific_goals": [r"(?i)score in the (first|second) half"],
+            "player_goal_assist": [r"(?i)score or assist", r"(?i)score a goal", r"(?i)assist a goal"],
+            "player_shot_on_target": [r"(?i)at least \d+ shot on target", r"(?i)shot on target.*by"],
             "shots_on_target_comparison": [r"(?i)more shots on target than"],
             "shots_on_target_threshold": [r"(?i)shots? on target"],
-            "player_goal_assist": [r"(?i)score or assist", r"(?i)score a goal", r"(?i)assist a goal"],
-            "player_shot_on_target": [r"(?i)shot on target.*by"],
-            "penalty_or_red": [r"(?i)penalty.*red card", r"(?i)penalty kick.*awarded"],
+            "corners_comparison": [r"(?i)more corner kicks? than", r"(?i)more corners than"],
+            "corners_threshold": [r"(?i)corner"],
+            "fouls_comparison": [r"(?i)more fouls"],
+            "penalty_or_red": [r"(?i)penalty.*red card", r"(?i)red card.*penalty", r"(?i)penalty kick.*awarded"],
+            "cards_threshold": [r"(?i)\bcards?\b", r"(?i)yellow card", r"(?i)red card"],
+            "offsides_threshold": [r"(?i)offside"],
             "first_goal_conditional": [r"(?i)score the first goal"],
         }
-        
+
     def classify(self, market, match_data=None):
         """Classify a single market question using regex only."""
         question = market.get("question_text", "")
-        
-        # Check compound conditions first
-        if " and " in question.lower() or " AND " in question:
+        ql = question.lower()
+
+        # A TRUE compound joins two distinct event clauses. Exclude benign
+        # 'or'/'and' phrases that are part of a single market wording
+        # (e.g. "3 or more", "2 or fewer", "score or assist", "penalty ... or a red card").
+        benign_or = any(p in ql for p in (
+            "or more", "or fewer", "or less", "score or assist",
+            "or a red card", "red card or", "awarded or"))
+        if " and " in ql:
             return {"type": "compound_and"}
-        if " or " in question.lower() or " OR " in question:
+        if " or " in ql and not benign_or:
             return {"type": "compound_or"}
-            
-        # Try regex patterns
+
+        # Try regex patterns (specific -> general).
         for type_name, patterns in self.patterns.items():
             for pattern in patterns:
                 if re.search(pattern, question):
                     return self._extract_entities(type_name, question, match_data)
-                    
+
         return None  # Return None to signal "needs AI"
 
     def _extract_entities(self, type_name, question, match_data):

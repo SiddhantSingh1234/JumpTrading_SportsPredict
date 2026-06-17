@@ -4,6 +4,10 @@ import logging
 from datetime import datetime
 from src.config import Config
 from src.database import Database
+from src.intl_data import IntlData
+from src.odds_client import OddsClient
+from src.reddit_sentiment import RedditSentiment
+from src.team_names import to_canonical
 from src.seed_team_codes import FIFA_CODES
 
 # Build a reverse lookup: 3-letter code -> full name
@@ -216,7 +220,10 @@ class DataCollector:
         # self.football_data = FootballDataClient()
         self.news_scraper = news_scraper
         self.ai = ai_client
-        
+        self.intl = IntlData()
+        self.odds = OddsClient(db)
+        self.reddit = RedditSentiment()
+
     def _resolve_team_names(self, match):
         """Extract and resolve 3-letter codes to full team names from a match dict."""
         match_name = match.get("name", "")
@@ -238,7 +245,11 @@ class DataCollector:
         """
         logger.info("Starting extensive collection (web scraping mode)...")
         matches = self.sp_api.get_matches(event_id)
-        
+
+        # Infer tournament stage from kickoff date for stage weighting (1x/2x/3x).
+        for m in matches:
+            m["stage"] = Config.infer_stage(m.get("opening_time"))
+
         # Save matches to DB
         self.db.save_matches(matches)
         
@@ -250,52 +261,52 @@ class DataCollector:
             return
         
         logger.info(f"Found {len(upcoming)} matches within 24 hours.")
-        
+
+        # Fetch bookmaker odds once (1 request covers all events) and index by
+        # the unordered team pair for matching.
+        odds_lookup = {}
+        try:
+            for ev in self.odds.refresh_all():
+                key = frozenset((to_canonical(ev["home"]), to_canonical(ev["away"])))
+                odds_lookup[key] = ev["probs"]
+        except Exception as e:
+            logger.warning(f"Odds refresh failed: {e}")
+
         for match in upcoming:
             match_name = match.get("name", "Unknown")
             logger.info(f"Processing match: {match_name}")
             
             home_full, away_full = self._resolve_team_names(match)
-            
+
+            # Attach bookmaker odds for this match if available.
+            odds = odds_lookup.get(frozenset((home_full, away_full)))
+            if odds:
+                match["odds"] = odds
+                self.db.save_matches([match])
+                logger.info(f"Attached odds for {match.get('name')}: {odds.get('home_win')}/{odds.get('draw')}/{odds.get('away_win')}")
+
             # Create enriched match dict with full team names for scraping/AI
             enriched_match = dict(match)
             enriched_match["home_team_name"] = home_full
             enriched_match["away_team_name"] = away_full
             
             # --------------------------------------------------------
-            # STEP 1: Scrape team stats from the web (FBref / Wikipedia)
+            # STEP 1: Real national-team stats + Elo + scorers from the
+            # international-results dataset (free; refresh ~ every 12h).
             # --------------------------------------------------------
-            if self._should_refresh(match, "web_stats", hours=None):
-                logger.info(f"Scraping web stats for {home_full} and {away_full}...")
-                
-                home_stats = self.news_scraper.scrape_comprehensive_stats(home_full)
-                away_stats = self.news_scraper.scrape_comprehensive_stats(away_full)
-                
-                # Get or create team docs using match name as ID (since we don't have API IDs)
+            if self._should_refresh(match, "intl_stats", hours=12):
                 home_team_id = match.get("home_team_id") or home_full.replace(" ", "_").lower()
                 away_team_id = match.get("away_team_id") or away_full.replace(" ", "_").lower()
-                
-                # Save team IDs back to match if they weren't set
+
                 if not match.get("home_team_id"):
                     match["home_team_id"] = home_team_id
                 if not match.get("away_team_id"):
                     match["away_team_id"] = away_team_id
                 self.db.save_matches([match])
-                
-                # Merge scraped stats into team docs
-                if home_stats:
-                    home_doc = self.db.get_team(home_team_id) or {"team_id": str(home_team_id)}
-                    home_doc.update(home_stats)
-                    self.db.update_team_stats(match, home_doc)
-                    logger.info(f"Saved web-scraped stats for {home_full}: {home_stats}")
-                
-                if away_stats:
-                    away_doc = self.db.get_team(away_team_id) or {"team_id": str(away_team_id)}
-                    away_doc.update(away_stats)
-                    self.db.update_team_stats(match, away_doc)
-                    logger.info(f"Saved web-scraped stats for {away_full}: {away_stats}")
-                
-                self._mark_refreshed(match, "web_stats")
+
+                self._populate_team(match, home_team_id, home_full)
+                self._populate_team(match, away_team_id, away_full)
+                self._mark_refreshed(match, "intl_stats")
             
             # --------------------------------------------------------
             # STEP 2: Scrape news + AI summarization + AI stats extraction
@@ -330,6 +341,29 @@ class DataCollector:
                     self._inject_ai_stats(match, away_team_id, away_full, structured, "away")
         
         logger.info("Extensive collection complete.")
+
+    def _populate_team(self, match, team_id, full_name):
+        """Populate a team doc with real rates, Elo, and scorers from the
+        international-results dataset. Leaves prior data intact on miss."""
+        stats = self.intl.get_team_stats(full_name)
+        if not stats:
+            logger.warning(f"No international data for {full_name}; keeping existing stats.")
+            return
+        doc = self.db.get_team(team_id) or {}
+        doc.update(stats)
+        doc["team_id"] = str(team_id)
+        doc["name"] = full_name
+        try:
+            doc["top_scorers"] = self.intl.get_top_scorers(full_name)
+            doc["second_half_goal_share"] = self.intl.second_half_goal_share(full_name)
+        except Exception as e:
+            logger.warning(f"Scorer/half-share lookup failed for {full_name}: {e}")
+        self.db.update_team_stats(match, doc)
+        logger.info(
+            f"Populated {full_name}: elo={stats.get('elo')} "
+            f"gf={stats.get('avg_goals_scored')} ga={stats.get('avg_goals_conceded')} "
+            f"scorers={len(doc.get('top_scorers', []))}"
+        )
 
     def _inject_ai_stats(self, match, team_id, team_name, structured, side):
         """Inject AI-mined stats into team documents if they're still at default baselines."""
@@ -383,16 +417,47 @@ class DataCollector:
         enriched_match["home_team_name"] = home_full
         enriched_match["away_team_name"] = away_full
         
-        # Quick scan via Google News RSS only
+        # 1. Confirmed lineups / injuries via Google Search grounding (separate
+        #    1500/day quota). This replaces fragile scraping for the key info.
+        grounded = ""
+        if self.ai:
+            grounded = self.ai.grounded_team_news(enriched_match)
+
+        # 2. Latest RSS headlines as a supplementary qualitative overlay.
         latest_headlines = self.news_scraper.quick_scan(enriched_match)
-        
-        if latest_headlines:
+
+        # 3. Crowd sentiment -> structured signal for Bot 2.
+        #    Primary: Reddit API (PRAW) if credentials are configured.
+        #    Fallback: Gemini Google-Search grounding over the SAME subreddits
+        #    (no Reddit credentials needed), tracked on the grounding quota.
+        try:
+            sentiment = {}
+            bundle = self.reddit.fetch_match_sentiment(home_full, away_full)
+            if bundle and self.ai:
+                sentiment = self.ai.extract_sentiment(bundle, enriched_match)
+            if not sentiment and self.ai:
+                sentiment = self.ai.grounded_sentiment(enriched_match)
+            if sentiment:
+                self.db.save_sentiment(match_id, sentiment)
+                logger.info(
+                    f"Saved crowd sentiment for {match_id} "
+                    f"(via {sentiment.get('source', 'reddit')}): fav={sentiment.get('public_favorite')}"
+                )
+        except Exception as e:
+            logger.warning(f"Crowd sentiment step failed: {e}")
+
+        if grounded or latest_headlines:
             old_briefing = self.db.get_news(match_id)
-            new_briefing = self.ai.summarize_news(latest_headlines, old_briefing, enriched_match)
-            structured = self.ai.extract_stats(latest_headlines, enriched_match)
+            combined_old = (old_briefing or "")
+            if grounded:
+                combined_old = f"CONFIRMED (live search): {grounded}\n\n{combined_old}"
+            new_briefing = self.ai.summarize_news(latest_headlines, combined_old, enriched_match) \
+                if (self.ai and latest_headlines) else combined_old
+            structured = self.ai.extract_stats(latest_headlines, enriched_match) \
+                if (self.ai and latest_headlines) else {}
             self.db.save_news(match_id, new_briefing, latest_headlines, structured)
             return True
-            
+
         return False
 
     def _should_refresh(self, match, key, hours=6):

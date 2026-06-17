@@ -1,130 +1,172 @@
-import json
 import logging
+
+from src import calibration as calibration_lib
 from src.config import Config
 
 logger = logging.getLogger(__name__)
 
+
 class Predictor:
+    """Turns model probabilities + news into final 1-99 submissions.
+
+    The quantitative model (engine + market_model) already produces an informed
+    probability for every market. The AI's job is to *adjust* those for
+    qualitative factors (injuries, confirmed lineups, motivation, rotation),
+    NOT to invent numbers. If the AI is unavailable or returns nothing, we fall
+    back to the model probabilities — never to a blanket 50.
+    """
+
     def __init__(self, ai_client):
         self.ai = ai_client
-        
-    def predict(self, bot_number, sim_results, news, structured_news, classified_markets, match_data):
-        """Generate predictions for a specific bot."""
-        logger.info(f"Generating predictions for Bot {bot_number} (Match {match_data.get('id')})")
-        
-        # We need to construct a prompt depending on whether it's Bot 1 or Bot 2
-        # For this implementation, we simulate the AI logic if an AI client isn't fully integrated,
-        # but the actual prompt structure matches the implementation plan.
-        
-        system_prompt = self._get_bot_system_prompt(bot_number)
-        
-        # Build prompt context
+
+    def predict(self, bot_number, sim_results, news, structured_news,
+                classified_markets, match_data, crowd_sentiment=None, calibration=None):
+        logger.info(f"Generating Bot {bot_number} predictions (match {match_data.get('id')})")
+
+        market_probs = sim_results.get("market_probs", {}) or {}
+        market_details = sim_results.get("market_details", {}) or {}
+
         stage = match_data.get("stage", "group")
         stage_weight = {"group": 1, "knockout": 2, "final": 3}.get(stage, 1)
-        
+
+        markets_for_prompt = []
+        for m in classified_markets:
+            mid = str(m.get("id"))
+            model_p = market_probs.get(mid, 0.5)
+            det = market_details.get(mid, {})
+            markets_for_prompt.append({
+                "market_id": mid,
+                "question": m.get("question_text") or m.get("question") or m.get("text", ""),
+                "model_probability": int(round(model_p * 100)),
+                "model_source": det.get("source", "model"),
+                "model_confidence": det.get("confidence", "med"),
+            })
+
         prompt_data = {
+            "match": match_data.get("name", "Match"),
             "stage": stage,
             "stage_weight": stage_weight,
-            "team_a": match_data.get("home_team_name", "Team A"),
-            "team_b": match_data.get("away_team_name", "Team B"),
-            "sim_results": sim_results.get("market_probs", {}),
-            "news_briefing": news,
-            "structured_news": structured_news,
-            "markets": [{"id": m.get("id"), "text": m.get("question_text") or m.get("question") or m.get("text", "")} for m in classified_markets]
+            "elo_probs": sim_results.get("elo_probs"),
+            "news_briefing": news or "",
+            "structured_news": structured_news or {},
+            "crowd_sentiment": crowd_sentiment or {},
+            "markets": markets_for_prompt,
         }
-        
+
+        stance = Config.COMPETITION_STANCE
+        prompt_data["competition_stance"] = stance
+
+        ai_preds = []
         if self.ai:
             try:
-                # Ask Gemini 3.5 Flash
-                response = self.ai.generate_predictions(system_prompt, prompt_data)
-                return self._validate_and_clamp(response, classified_markets)
+                system_prompt = self._system_prompt(bot_number) + self._stance_clause(stance)
+                ai_preds = self.ai.generate_predictions(system_prompt, prompt_data) or []
             except Exception as e:
-                logger.error(f"AI Prediction failed for Bot {bot_number}: {e}")
-        
-        # Fallback logic if AI fails or isn't provided
-        return self._fallback_predictions(bot_number, sim_results, classified_markets)
+                logger.error(f"AI prediction failed for Bot {bot_number}: {e}")
+                ai_preds = []
 
-    def _get_bot_system_prompt(self, bot_number):
-        if bot_number == 1:
-            return """You are Bot 1: THE CALIBRATED BASELINE (Smart Money Consensus).
-Your absolute and sole objective is to MAXIMIZE RELATIVE BRIER POINT (RBP) in the Jump Trading Probability Cup.
-RBP is calculated as: (crowd_brier - user_brier) * 100. Because Brier scoring is quadratic, extreme overconfidence (probabilities near 1 or 99) carries a massive, exponential penalty if wrong. 
+        return self._merge(ai_preds, classified_markets, market_probs, calibration)
 
-You must act as the ultimate analytical machine. Before generating any probability, you must perform a deep, exhaustive analysis:
-1. QUANTITATIVE ANCHOR: Review the Monte Carlo simulation probabilities. CRITICAL RULE: The system uses a hardcoded fallback baseline of exactly 1.5 Goals Scored and 1.0 Goals Conceded for teams with no recent match data. If you detect that a team's stats perfectly match this 1.5/1.0 baseline, the math engine is currently blind—you MUST rely almost entirely on the qualitative News Briefing. If their stats deviate from 1.5/1.0, it means real World Cup data is flowing in. As the tournament progresses and stats deviate, dynamically shift your weight back to trusting the quantitative simulation math.
-2. QUALITATIVE OVERLAY: Thoroughly analyze the provided structured stats, injury reports, confirmed lineups, and the news briefing. Give massive weightage to this breaking news if the math is locked to the baseline.
-3. CONTEXTUAL WEIGHTING: Consider the tournament stage. Group stages (1x weight) see more rotation; Knockouts (2x) and Finals (3x) see tighter, more defensive football.
-4. CALIBRATION: Aggressively adjust the baseline simulation probability using your qualitative news findings. If the news shows a star striker is injured or a team is resting players, heavily discount the simulation's predictions.
-5. RISK MANAGEMENT: You represent the smart consensus. Generally, keep your probabilities between 15 and 85 to minimize Brier penalty risk. Note the competition scoring rules: Knockout matches have a 2x point weightage, and the Final has a 3x point weightage. For these high-stakes matches, the massive upside for a correct prediction is matched only by the drastically multiplied Brier penalties for extreme overconfidence. Be incredibly careful with your probability spreads, but do not be afraid to capitalize on the huge upside if the math and news strongly align.
+    # ------------------------------------------------------------------ #
 
-Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99).
-
-TIME CONSTRAINT: You have up to 15 minutes to think, but aim to complete your analysis and output your final JSON within 12 minutes. Think as deeply as you need to — consider every angle, every data point, every edge — but once you've done your analysis, commit to your numbers and output the JSON."""
-        else:
-            return """You are Bot 2: THE EDGE HUNTER (Contrarian Value Seeker).
-Your absolute and sole objective is to MAXIMIZE RELATIVE BRIER POINT (RBP) by exploiting crowd bias and finding hidden value.
-RBP rewards you heavily when you are correct and the crowd is wrong. The crowd is often heavily influenced by recency bias, public narratives, and star player popularity, while ignoring tactical mismatches or systemic flaws.
-
-You must perform extensive, multi-layered research before predicting:
-1. IDENTIFY THE CROWD: Read the news briefing and standard simulations. Note that the "average" bettor will blindly follow the simulation math, even when it is just guessing.
-2. FIND THE EDGE: Dig deep into the structured stats. CRITICAL RULE: Our system uses a hardcoded fallback of 1.5 Goals Scored and 1.0 Conceded. If a team's stats match this 1.5/1.0 baseline exactly, the simulation is completely blind. If so, your absolute greatest edge lies in exploiting the breaking news and lineup rotations. If their stats deviate from 1.5/1.0, real tournament data has arrived; you must adapt and start blending the true simulation math back into your edge strategy as the tournament progresses.
-3. FORMULATE THESIS: Build a specific, data-backed thesis for why the simulation math or crowd is slightly wrong based on current team news or true math divergence.
-4. EXECUTE EDGE: Push your probability aggressively (but intelligently) away from the simulation and in the direction of the news. If the math says 60% but the news shows they are playing a backup goalkeeper, push it to 40% or 30%.
-5. CALIBRATION & SCORING WEIGHTS: You take more calculated risks than Bot 1 to maximize the RBP spread, but you still respect the Brier penalty. Avoid 1 or 99. The competition rules state Knockouts have a 2x weightage and the Final has a 3x weightage. In these matches, the reward for a correct contrarian prediction is astronomical, but the Brier penalties for being wrong are massively amplified. You must balance your contrarian edge with absolute precision to capture this huge upside when the stakes are 2x or 3x. Keep probabilities strictly integer 1 to 99.
-
-Output your final prediction as a strict JSON list of objects containing 'market_id' and 'probability' (must be an integer from 1 to 99).
-
-TIME CONSTRAINT: You have up to 15 minutes to think, but aim to complete your analysis and output your final JSON within 12 minutes. Think as deeply as you need to — consider every angle, every data point, every edge — but once you've done your analysis, commit to your numbers and output the JSON."""
-
-    def _validate_and_clamp(self, predictions, markets):
-        """Ensure predictions are 1-99 and all markets are covered."""
-        valid_preds = []
-        market_ids = {str(m["id"]) for m in markets}
-        
-        for p in predictions:
+    def _merge(self, ai_preds, markets, market_probs, calibration=None):
+        """Use the AI value where valid; otherwise fall back to the model
+        probability. Then recalibrate (Tier 5) using the learned map. Never
+        blanket 50."""
+        ai_by_id = {}
+        for p in ai_preds or []:
             mid = str(p.get("market_id"))
-            if mid in market_ids:
-                prob = p.get("probability", 50)
-                # Clamp between 1 and 99
-                prob = max(Config.PROBABILITY_MIN, min(Config.PROBABILITY_MAX, int(prob)))
-                p["probability"] = prob
-                valid_preds.append(p)
-                market_ids.remove(mid)
-                
-        # Fill in missing markets with a default 50%
-        for missing_mid in market_ids:
-            valid_preds.append({
-                "market_id": missing_mid,
-                "probability": 50,
-                "reasoning": "Fallback prediction."
-            })
-            
-        return valid_preds
+            prob = p.get("probability")
+            try:
+                prob = int(round(float(prob)))
+            except (TypeError, ValueError):
+                continue
+            ai_by_id[mid] = prob
 
-    def _fallback_predictions(self, bot_number, sim_results, markets):
-        """Fallback prediction generator based entirely on simulation math."""
-        logger.warning(f"Using fallback predictions for Bot {bot_number}.")
-        preds = []
-        market_probs = sim_results.get("market_probs", {})
-        
+        out = []
+        ai_used = model_used = recal = 0
         for m in markets:
             mid = str(m["id"])
-            raw_prob = market_probs.get(mid, 0.5)
-            
-            if bot_number == 2:
-                # Bot 2 tries to be edgy: push away from 0.5 slightly
-                if raw_prob > 0.5:
-                    raw_prob += 0.03
-                else:
-                    raw_prob -= 0.03
-            
-            prob_int = int(raw_prob * 100)
-            prob_int = max(Config.PROBABILITY_MIN, min(Config.PROBABILITY_MAX, prob_int))
-            
-            preds.append({
-                "market_id": mid,
-                "probability": prob_int,
-                "math_baseline": int(raw_prob * 100),
-                "reasoning": "Mathematical baseline from Monte Carlo simulation."
-            })
-        return preds
+            if mid in ai_by_id:
+                prob = ai_by_id[mid]
+                source = "ai"
+                ai_used += 1
+            else:
+                model_p = market_probs.get(mid, 0.5)
+                prob = int(round(model_p * 100))
+                source = "model_fallback"
+                model_used += 1
+
+            # Recalibrate using the learned reliability map for this category.
+            if calibration:
+                mtype = (m.get("classification") or {}).get("type", "unknown")
+                cat = calibration_lib.category_for(mtype)
+                new_p01 = calibration_lib.apply(prob / 100.0, cat, calibration)
+                new_prob = int(round(new_p01 * 100))
+                if new_prob != prob:
+                    recal += 1
+                prob = new_prob
+
+            prob = max(Config.PROBABILITY_MIN, min(Config.PROBABILITY_MAX, prob))
+            out.append({"market_id": mid, "probability": prob, "source": source})
+
+        logger.info(f"Predictions merged: {ai_used} AI, {model_used} model fallback, {recal} recalibrated.")
+        return out
+
+    def _stance_clause(self, stance):
+        if stance == "climb":
+            return ("\n\nSTANCE: We are TRAILING on the leaderboard. On your HIGHEST-CONVICTION "
+                    "edges, take a little more variance (push further from 50 when the model and "
+                    "news strongly agree) to climb — but never on weak signals or in high-weight "
+                    "matches (knockout = 2x points, final = 3x points), where being wrong is "
+                    "penalised 2-3x.")
+        if stance == "defend":
+            return ("\n\nSTANCE: We are LEADING. Play conservatively — hug the model/consensus and "
+                    "avoid extreme positions to lock in the lead.")
+        return ""
+
+    # ------------------------------------------------------------------ #
+
+    def _system_prompt(self, bot_number):
+        common = (
+            "You are predicting binary (yes/no) markets on FIFA World Cup 2026 matches for the "
+            "Jump Trading Probability Cup. Scoring is Relative Brier Points: "
+            "RBP = (crowd_brier - your_brier) * 100. You are scored AGAINST THE CROWD "
+            "(casual humans + generic AI bots), and you CANNOT see the crowd's prices.\n\n"
+            "KEY FACTS:\n"
+            "- Brier is a strictly proper scoring rule: your best score comes from submitting your "
+            "HONEST calibrated probability. Do NOT artificially compress toward 50, and do NOT inflate "
+            "toward extremes. Report what you actually believe.\n"
+            "- Each market comes with a MODEL_PROBABILITY computed from a quantitative engine "
+            "(Elo ratings, real national-team scoring rates, Monte-Carlo goal simulation, and "
+            "structural base rates) plus a confidence tag. TREAT THIS AS YOUR ANCHOR.\n"
+            "- Your job is to ADJUST the model probability for qualitative factors the model does not "
+            "see: confirmed lineups, injuries/suspensions, rest/rotation, motivation (already-qualified "
+            "teams), weather, and clearly stale model data. If the news says nothing relevant, stay close "
+            "to the model probability.\n"
+            "- Higher model_confidence ('high') means goal-based Monte-Carlo — trust it strongly. "
+            "'low' means a thin base-rate prior — you may move more, but only with a real reason.\n"
+            "- Stage weight matters: knockout = 2x, final = 3x. In high-weight matches the Brier penalty "
+            "for being wrong is multiplied, so be more conservative with extreme values there.\n"
+            "- Only 1-99 is allowed. Reserve values below 8 or above 92 for genuine near-certainties.\n\n"
+            "OUTPUT: a strict JSON array; one object per market with 'market_id' (string) and "
+            "'probability' (integer 1-99). Include every market_id you were given."
+        )
+        if bot_number == 1:
+            role = (
+                "ROLE: CALIBRATED / MODEL-ANCHORED. Stay disciplined and close to the model probability, "
+                "nudging only for concrete news. You are the well-calibrated baseline whose edge is being "
+                "better calibrated than a careless crowd.\n\n"
+            )
+        else:
+            role = (
+                "ROLE: CROWD-DIVERGENCE / CONTRARIAN. Your edge is fading PREDICTABLE crowd bias. Use the "
+                "CROWD_SENTIMENT data (Reddit public lean, hype, betting consensus) when present, plus these "
+                "rules: (1) the crowd over-rates star players and big nations -> fade hype on player props and "
+                "favorites when the model disagrees; (2) the crowd over-prices compound 'A AND B' markets -> "
+                "shade those DOWN toward the true (lower) joint probability; (3) on name-anchored coin-flips "
+                "(e.g. 'more 2nd-half corners/shots than the other team') the crowd drifts to the famous side "
+                "-> pull toward the model/base rate. Diverge from the crowd only where you have a real reason; "
+                "otherwise match the model. Respect the multiplied Brier penalty in 2x/3x matches.\n\n"
+            )
+        return role + common

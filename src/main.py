@@ -25,8 +25,8 @@ class AgenticSystem:
         self.sp_api2 = SportsPredictAPI(Config.BOT2_KEY)
         self.news_scraper = NewsScraper()
         
-        # Initialize Google GenAI client
-        self.ai_client = AIClient(Config.GEMINI_API_KEY) if Config.GEMINI_API_KEY else None 
+        # Initialize Google GenAI client (db enables cross-run daily quota tracking)
+        self.ai_client = AIClient(Config.GEMINI_API_KEY, self.db) if Config.GEMINI_API_KEY else None
         
         self.collector = DataCollector(self.db, self.sp_api1, self.news_scraper, self.ai_client)
         self.classifier = MarketClassifier(self.ai_client)
@@ -99,6 +99,9 @@ class AgenticSystem:
         
         # 3. Simulate
         updated_match = self.db.get_match(match_id)
+        # Ensure stage is set (drives stage weighting 1x/2x/3x in the prompts).
+        if updated_match and not updated_match.get("stage"):
+            updated_match["stage"] = Config.infer_stage(updated_match.get("opening_time"))
         home_team_stats = self.db.get_team(updated_match.get("home_team_id"))
         away_team_stats = self.db.get_team(updated_match.get("away_team_id"))
         sim_results = self.engine.simulate_match(updated_match, home_team_stats, away_team_stats, classified)
@@ -107,12 +110,14 @@ class AgenticSystem:
         # 4. Predict
         news = self.db.get_news(match_id)
         structured = self.db.get_structured_news(match_id)
-        
+        crowd_sentiment = self.db.get_sentiment(match_id)
+        calibration = self.db.get_state("calibration")  # learned recalibration map
+
         logger.info(f"Generating Bot 1 predictions for {match_name}...")
-        bot1_preds = self.predictor.predict(1, sim_results, news, structured, classified, updated_match)
+        bot1_preds = self.predictor.predict(1, sim_results, news, structured, classified, updated_match, crowd_sentiment, calibration)
         time.sleep(8)  # Allow rate limiter in ai_client to handle precise timing
         logger.info(f"Generating Bot 2 predictions for {match_name}...")
-        bot2_preds = self.predictor.predict(2, sim_results, news, structured, classified, updated_match)
+        bot2_preds = self.predictor.predict(2, sim_results, news, structured, classified, updated_match, crowd_sentiment, calibration)
         
         # 5. Submit to Jump Trading
         logger.info(f"Submitting Bot 1 predictions for {match_name}...")
