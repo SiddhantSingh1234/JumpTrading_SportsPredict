@@ -55,6 +55,7 @@ class Predictor:
 
         stance = Config.COMPETITION_STANCE
         prompt_data["competition_stance"] = stance
+        logger.info(f"Bot {bot_number} competition stance: {stance}")
 
         ai_preds = []
         if self.ai:
@@ -144,8 +145,43 @@ class Predictor:
             "see: confirmed lineups, injuries/suspensions, rest/rotation, motivation (already-qualified "
             "teams), weather, and clearly stale model data. If the news says nothing relevant, stay close "
             "to the model probability.\n"
-            "- Higher model_confidence ('high') means goal-based Monte-Carlo — trust it strongly. "
-            "'low' means a thin base-rate prior — you may move more, but only with a real reason.\n"
+            "- model_confidence tells you how much signal the MODEL has: 'high' = goal-based "
+            "Monte-Carlo / bookmaker odds — trust it strongly and move it little. 'med'/'low' = a thin or "
+            "base-rate prior, which usually means the MARKET ITSELF is hard or near-random — do NOT read "
+            "low confidence as licence to be bold; default to the model unless you have specific, nameable "
+            "information.\n"
+            "- CRITICAL — forecast only what you can actually know. You add real value where you have "
+            "genuine knowledge: match result, total goals, both-teams-to-score, a named player's role / "
+            "goal or shot threat, and team-style or referee effects on cards, fouls and corners. But many "
+            "markets are NEAR-RANDOM and unforecastable — exact OFFSIDE counts, precise corner/shot "
+            "tallies, and fine-grained HALF-BY-HALF comparisons (e.g. 'more goals in the 2nd half than the "
+            "1st', 'more shots on target in the 2nd half than the opponent', 'tied at halftime'). No one "
+            "can predict these; the MODEL_PROBABILITY (a calibrated base rate) is genuinely the best "
+            "estimate. On such markets STAY WITHIN A FEW POINTS OF THE MODEL unless you can name a concrete "
+            "reason (a known offside-trap defence, a high-corner pressing style, a card-happy referee). "
+            "Inventing confidence on a coin-flip is the single biggest way to LOSE Relative Brier Points, "
+            "because Brier penalises being confident-and-wrong quadratically.\n"
+            "- Where you DO have information, USE IT — especially for GOAL and SHOT markets. A team's "
+            "attacking strength, recent goal-scoring form, and the availability of its key attackers heavily "
+            "drive total goals, team-to-score, half-specific scoring, and shots-on-target. The MODEL_PROBABILITY "
+            "is built mainly from past goal rates and Elo; it does NOT know current attacking form or who is "
+            "fit. So if the news / sentiment shows a team in strong (or poor) attacking form, missing or "
+            "returning a key striker or creator, playing an open high-tempo style vs a deep defensive block, "
+            "or a clear pattern of scoring late (2nd-half) or early — SHIFT the relevant goal/shot "
+            "probabilities accordingly. For example: raise a side's 2nd-half scoring / shots if they finish "
+            "matches strongly or will be chasing the game, and lower them if their main scorer is out, the "
+            "opponent defends deep, or they are already qualified and likely to rest players. These attack/"
+            "defence reads are exactly the qualitative edge the model cannot see — lean on them confidently.\n"
+            "- For PLAYER markets (will [player] score or assist / have a shot on target), the FIRST thing to "
+            "check is the confirmed STARTING LINEUP from the news/sentiment. A player who is benched, injured, "
+            "suspended or not selected cannot shoot or score — drop the probability sharply (low single digits "
+            "if confirmed out, low-teens for a likely bench/rotation risk). Only if the player is confirmed (or "
+            "very likely) STARTING should you use the model's player rate as the anchor, then adjust for their "
+            "role (first-choice striker / penalty-taker / creator vs a defender or holding midfielder), recent "
+            "form, and how the opponent defends — a key attacker starting against a weak defence raises it; a "
+            "rotation risk or deep-defending opponent lowers it. Never leave a player market near the model "
+            "default if the lineup news contradicts it but properly verify if the lineup news contradicts the model "
+            "and only then change to an appropriate extent. Do not overestimate the impact of any single piece of information.\n"
             "- Stage weight matters: knockout = 2x, final = 3x. In high-weight matches the Brier penalty "
             "for being wrong is multiplied, so be more conservative with extreme values there.\n"
             "- Only 1-99 is allowed. Reserve values below 8 or above 92 for genuine near-certainties.\n\n"
@@ -156,7 +192,9 @@ class Predictor:
             role = (
                 "ROLE: CALIBRATED / MODEL-ANCHORED. Stay disciplined and close to the model probability, "
                 "nudging only for concrete news. You are the well-calibrated baseline whose edge is being "
-                "better calibrated than a careless crowd.\n\n"
+                "better calibrated than a careless crowd. On near-random markets (offside/corner/shot counts, "
+                "half-by-half comparisons) your discipline IS the edge — default to the model there and spend "
+                "your adjustments on the goal, result and player markets where you actually have information.\n\n"
             )
         else:
             role = (
@@ -167,6 +205,10 @@ class Predictor:
                 "shade those DOWN toward the true (lower) joint probability; (3) on name-anchored coin-flips "
                 "(e.g. 'more 2nd-half corners/shots than the other team') the crowd drifts to the famous side "
                 "-> pull toward the model/base rate. Diverge from the crowd only where you have a real reason; "
-                "otherwise match the model. Respect the multiplied Brier penalty in 2x/3x matches.\n\n"
+                "otherwise match the model. Respect the multiplied Brier penalty in 2x/3x matches.\n"
+                "IMPORTANT: contrarian does NOT mean overconfident. Your divergence must target an "
+                "IDENTIFIABLE bias (hype, compound over-pricing, name-anchoring) — never a random count "
+                "market. On offside counts, exact corner/shot tallies and half-split comparisons you have NO "
+                "edge over the model, so match it; bold numbers there just bleed Brier points.\n\n"
             )
         return role + common

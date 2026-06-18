@@ -32,21 +32,30 @@ def _result_field(entry, *keys):
 
 
 class Calibrator:
-    def __init__(self, db: Database, sp_api, ai_client=None):
+    def __init__(self, db: Database, sp_apis, ai_client=None):
         self.db = db
-        self.sp_api = sp_api
+        # Accept {bot_num: api} for per-bot calibration, or a single api (-> bot 1).
+        self.sp_apis = sp_apis if isinstance(sp_apis, dict) else {1: sp_apis}
         self.ai = ai_client
         # Regex-only classifier (no AI calls) to categorise the question text
         # that /results returns directly.
         self.classifier = MarketClassifier(None)
 
     def run_full_calibration(self):
-        """Daily: score settled results, fit a recalibration map per market
-        category, detect per-category bias, and persist for the predict run."""
-        logger.info("Starting calibration run.")
-        results = self.sp_api.get_results()
+        """Daily: fit a SEPARATE recalibration map per bot (Bot 1 and Bot 2 have
+        different bias profiles), detect per-category bias, and persist each for
+        the predict run."""
+        for bot, api in self.sp_apis.items():
+            try:
+                self._calibrate_bot(bot, api)
+            except Exception as e:
+                logger.warning(f"Calibration failed for Bot {bot}: {e}")
+
+    def _calibrate_bot(self, bot, api):
+        logger.info(f"Calibration run for Bot {bot}.")
+        results = api.get_results()
         if not results:
-            logger.info("No settled results to process.")
+            logger.info(f"Bot {bot}: no settled results to process.")
             return
 
         samples = []          # (category, prob01, outcome)
@@ -95,21 +104,21 @@ class Calibrator:
             agg["sum_o"] += outcome
 
         if skipped_old:
-            logger.info(f"Calibration: skipped {skipped_old} pre-{since} results (old bot).")
+            logger.info(f"Bot {bot}: skipped {skipped_old} pre-{since} results (old bot).")
         if scored == 0:
             # Only clear when the date cutoff removed everything (all results were
-            # pre-cutoff old-bot ones) — so we don't wipe a good accumulated map
-            # on a future run that just happens to have no new settled results.
+            # pre-cutoff) — so we don't wipe a good accumulated map on a future
+            # run that just happens to have no new settled results.
             if skipped_old:
-                self.db.save_state("calibration", {})
-                logger.info("All settled results were pre-cutoff; cleared calibration map (identity).")
+                self.db.save_state(f"calibration_{bot}", {})
+                logger.info(f"Bot {bot}: all settled results pre-cutoff; cleared calibration map.")
             else:
-                logger.info("No scorable settled results found.")
+                logger.info(f"Bot {bot}: no scorable settled results found.")
             return
 
-        # Fit + persist the recalibration map for the predict run to apply.
+        # Fit + persist this bot's recalibration map for the predict run to apply.
         calib = calibration.fit(samples)
-        self.db.save_state("calibration", calib)
+        self.db.save_state(f"calibration_{bot}", calib)
 
         # Per-category bias report (mean predicted vs realised) for visibility.
         report = {"overall_brier": round(total_brier / scored, 4), "scored": scored, "by_category": {}}
@@ -124,21 +133,20 @@ class Calibrator:
                 "mean_actual": round(mean_o, 4),
                 "bias": round(mean_p - mean_o, 4),  # +ve = we over-predict this category
             }
-        self.db.save_state("calibration_report", report)
-        logger.info(f"Calibration complete: {scored} settled, overall Brier {report['overall_brier']}.")
+        self.db.save_state(f"calibration_report_{bot}", report)
+        logger.info(f"Bot {bot} calibration: {scored} settled, overall Brier {report['overall_brier']}.")
         for cat, r in report["by_category"].items():
-            logger.info(f"  [{cat}] n={r['n']} brier={r['brier']} bias={r['bias']:+.3f}")
+            logger.info(f"  Bot{bot} [{cat}] n={r['n']} brier={r['brier']} bias={r['bias']:+.3f}")
 
         if self.ai:
-            self._ai_bias_summary(report)
+            self._ai_bias_summary(bot, report)
 
-    def _ai_bias_summary(self, report):
+    def _ai_bias_summary(self, bot, report):
         try:
             import json
             from src.config import Config
-            from google.genai import types
             prompt = (
-                "These are our prediction calibration stats per market category "
+                f"These are Bot {bot}'s prediction calibration stats per market category "
                 "(bias>0 = we over-predict). In under 120 words, name the 2-3 biggest "
                 f"systematic biases to correct:\n{json.dumps(report, indent=1)}"
             )
@@ -147,24 +155,29 @@ class Calibrator:
                 contents=prompt,
                 fallback_models=["gemma-4-31b-it"],
             )
-            self.db.save_state("calibration_notes", resp.text)
-            logger.info(f"Calibration notes: {resp.text[:200]}")
+            self.db.save_state(f"calibration_notes_{bot}", resp.text)
+            logger.info(f"Bot {bot} calibration notes: {resp.text[:160]}")
         except Exception as e:
-            logger.warning(f"AI bias summary failed: {e}")
+            logger.warning(f"AI bias summary failed for Bot {bot}: {e}")
 
     # ------------------------------------------------------------------ #
 
     def get_dashboard_data(self):
-        report = self.db.get_state("calibration_report") or {}
         preds = self.db.get_predictions()
-        return {
-            "overall_brier": report.get("overall_brier"),
-            "scored": report.get("scored", 0),
-            "by_category": report.get("by_category", {}),
+        out = {
             "total_predictions_bot1": sum(1 for p in preds if p.get("bot_number") == 1),
             "total_predictions_bot2": sum(1 for p in preds if p.get("bot_number") == 2),
-            "notes": self.db.get_state("calibration_notes") or "",
         }
+        for bot in (1, 2):
+            rep = self.db.get_state(f"calibration_report_{bot}") or {}
+            out[f"bot{bot}"] = {
+                "overall_brier": rep.get("overall_brier"),
+                "scored": rep.get("scored", 0),
+                "by_category": rep.get("by_category", {}),
+                "notes": self.db.get_state(f"calibration_notes_{bot}") or "",
+            }
+        return out
 
     def get_latest_report(self):
-        return self.db.get_state("calibration_report") or {"status": "no data yet"}
+        return {f"bot{b}": (self.db.get_state(f"calibration_report_{b}") or {"status": "no data yet"})
+                for b in (1, 2)}

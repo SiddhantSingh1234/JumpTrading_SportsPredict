@@ -32,7 +32,7 @@ class AgenticSystem:
         self.classifier = MarketClassifier(self.ai_client)
         self.engine = SimulationEngine()
         self.predictor = Predictor(self.ai_client)
-        self.calibrator = Calibrator(self.db, self.sp_api1, self.ai_client)
+        self.calibrator = Calibrator(self.db, {1: self.sp_api1, 2: self.sp_api2}, self.ai_client)
         
         self.event_id, self.lobby_id = self._init_lobby()
 
@@ -111,13 +111,15 @@ class AgenticSystem:
         news = self.db.get_news(match_id)
         structured = self.db.get_structured_news(match_id)
         crowd_sentiment = self.db.get_sentiment(match_id)
-        calibration = self.db.get_state("calibration")  # learned recalibration map
+        # Per-bot learned recalibration maps (Bot 1 and Bot 2 calibrate separately).
+        calib1 = self.db.get_state("calibration_1")
+        calib2 = self.db.get_state("calibration_2")
 
         logger.info(f"Generating Bot 1 predictions for {match_name}...")
-        bot1_preds = self.predictor.predict(1, sim_results, news, structured, classified, updated_match, crowd_sentiment, calibration)
+        bot1_preds = self.predictor.predict(1, sim_results, news, structured, classified, updated_match, crowd_sentiment, calib1)
         time.sleep(8)  # Allow rate limiter in ai_client to handle precise timing
         logger.info(f"Generating Bot 2 predictions for {match_name}...")
-        bot2_preds = self.predictor.predict(2, sim_results, news, structured, classified, updated_match, crowd_sentiment, calibration)
+        bot2_preds = self.predictor.predict(2, sim_results, news, structured, classified, updated_match, crowd_sentiment, calib2)
         
         # 5. Submit to Jump Trading
         logger.info(f"Submitting Bot 1 predictions for {match_name}...")
